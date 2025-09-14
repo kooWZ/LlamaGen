@@ -10,9 +10,17 @@ from torchvision.utils import save_image
 
 import time
 import argparse
-from tokenizer.tokenizer_image.vq_model import VQ_models
+import sys
+
+sys.path.append("/root/kongly/AR/LlamaGen")
 from autoregressive.models.gpt import GPT_models
 from autoregressive.models.generate import generate
+
+sys.path.append("/root/kongly/AR/LlamaGen/external_tokenizers/flextok")
+from external_tokenizers.flextok.flextok.flextok_wrapper import FlexTokFromHub
+from external_tokenizers.flextok.flextok.utils.misc import get_bf16_context
+from tqdm import tqdm
+from glob import glob
 
 
 def main(args):
@@ -21,30 +29,25 @@ def main(args):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     torch.set_grad_enabled(False)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda"
 
-    # create and load model
-    vq_model = VQ_models[args.vq_model](
-        codebook_size=args.codebook_size,
-        codebook_embed_dim=args.codebook_embed_dim)
-    vq_model.to(device)
-    vq_model.eval()
-    checkpoint = torch.load(args.vq_ckpt, map_location="cpu")
-    vq_model.load_state_dict(checkpoint["model"])
-    del checkpoint
-    print(f"image tokenizer is loaded")
+    if args.vq_ckpt is not None:
+        vq_model = FlexTokFromHub.from_pretrained(args.vq_ckpt)
+        vq_model.to(device)
+        vq_model.eval()
+    else:
+        vq_model = None
 
     # create and load gpt model
     precision = {'none': torch.float32, 'bf16': torch.bfloat16, 'fp16': torch.float16}[args.precision]
-    latent_size = args.image_size // args.downsample_size
     gpt_model = GPT_models[args.gpt_model](
         vocab_size=args.codebook_size,
-        block_size=latent_size ** 2,
+        block_size=args.latent_size,
         num_classes=args.num_classes,
         cls_token_num=args.cls_token_num,
         model_type=args.gpt_type,
     ).to(device=device, dtype=precision)
-    
+
     checkpoint = torch.load(args.gpt_ckpt, map_location="cpu")
     if args.from_fsdp: # fspd
         model_weight = checkpoint
@@ -76,18 +79,22 @@ def main(args):
     # Labels to condition the model with (feel free to change):
     class_labels = [207, 360, 387, 974, 88, 979, 417, 279]
     c_indices = torch.tensor(class_labels, device=device)
-    qzshape = [len(class_labels), args.codebook_embed_dim, latent_size, latent_size]
 
     t1 = time.time()
     index_sample = generate(
-        gpt_model, c_indices, latent_size ** 2,
-        cfg_scale=args.cfg_scale, cfg_interval=args.cfg_interval,
-        temperature=args.temperature, top_k=args.top_k,
-        top_p=args.top_p, sample_logits=True, 
-        )
+        gpt_model,
+        c_indices,
+        args.latent_size**2,
+        cfg_scale=args.cfg_scale,
+        cfg_interval=args.cfg_interval,
+        temperature=args.temperature,
+        top_k=args.top_k,
+        top_p=args.top_p,
+        sample_logits=True,
+    )
     sampling_time = time.time() - t1
     print(f"gpt sampling takes about {sampling_time:.2f} seconds.")    
-    
+
     t2 = time.time()
     samples = vq_model.decode_code(index_sample, qzshape) # output value is between [-1, 1]
     decoder_time = time.time() - t2
@@ -100,19 +107,27 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gpt-model", type=str, choices=list(GPT_models.keys()), default="GPT-B")
+    parser.add_argument("--gpt-model", type=str, default="GPT-Mini")
     parser.add_argument("--gpt-ckpt", type=str, default=None)
     parser.add_argument("--gpt-type", type=str, choices=['c2i', 't2i'], default="c2i", help="class-conditional or text-conditional")
     parser.add_argument("--from-fsdp", action='store_true')
     parser.add_argument("--cls-token-num", type=int, default=1, help="max token number of condition input")
     parser.add_argument("--precision", type=str, default='bf16', choices=["none", "fp16", "bf16"]) 
-    parser.add_argument("--compile", action='store_true', default=False)
-    parser.add_argument("--vq-model", type=str, choices=list(VQ_models.keys()), default="VQ-16")
-    parser.add_argument("--vq-ckpt", type=str, default=None, help="ckpt path for vq model")
-    parser.add_argument("--codebook-size", type=int, default=16384, help="codebook size for vector quantization")
+    parser.add_argument("--compile", action='store_true', default=True)
+    parser.add_argument(
+        "--vq-ckpt",
+        type=str,
+        default="/root/kongly/ckpts/flextok_d12_d12_in1k/",
+        help="ckpt path for vq model",
+    )
+    parser.add_argument(
+        "--codebook-size",
+        type=int,
+        default=64000,
+        help="codebook size for vector quantization",
+    )
     parser.add_argument("--codebook-embed-dim", type=int, default=8, help="codebook dimension for vector quantization")
-    parser.add_argument("--image-size", type=int, choices=[256, 384, 512], default=384)
-    parser.add_argument("--downsample-size", type=int, choices=[8, 16], default=16)
+    parser.add_argument("--latent-size", type=int, default=256)
     parser.add_argument("--num-classes", type=int, default=1000)
     parser.add_argument("--cfg-scale", type=float, default=4.0)
     parser.add_argument("--cfg-interval", type=float, default=-1)

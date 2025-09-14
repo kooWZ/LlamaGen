@@ -1,8 +1,44 @@
 import torch
 import numpy as np
 import os
-from torch.utils.data import Dataset
-from torchvision.datasets import ImageFolder
+from torch.utils.data import Dataset, ConcatDataset
+from .dataset_with_path import ImageFolderWithPath
+from glob import glob
+import h5py
+
+class H5Dataset(Dataset):
+    def __init__(self, h5_path):
+        self.h5_path = h5_path
+        self.file = None
+        with h5py.File(self.h5_path, "r") as f:
+            self.length = f["code"].shape[0]
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        if self.file is None:
+            self.file = h5py.File(self.h5_path, "r")
+        code = torch.from_numpy(self.file["code"][idx])
+        label = int(self.file["label"][idx])
+        path = self.file["path"][idx].decode("utf-8")
+        return code, label, path
+
+
+class H5DatasetInMemory(Dataset):
+    def __init__(self, h5_path):
+        with h5py.File(h5_path, "r") as f:
+            # 一次性全部加载到内存
+            self.codes = torch.from_numpy(f["code"][:])  # shape: (N, ...)
+            self.labels = torch.tensor(f["label"][:], dtype=torch.long)
+            self.paths = [p.decode("utf-8") for p in f["path"][:]]
+        self.length = len(self.codes)
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        return self.codes[idx], self.labels[idx], self.paths[idx]
 
 
 class CustomDataset(Dataset):
@@ -51,11 +87,12 @@ class CustomDataset(Dataset):
 
 
 def build_imagenet(args, transform):
-    return ImageFolder(args.data_path, transform=transform)
+    return ImageFolderWithPath(args.data_path, transform=transform)
+
+def get_code_dataset(path):
+    datasets = [H5DatasetInMemory(f) for f in sorted(glob(os.path.join(path, "*.h5")))]
+    full_dataset = ConcatDataset(datasets)
+    return full_dataset
 
 def build_imagenet_code(args):
-    feature_dir = f"{args.code_path}/imagenet{args.image_size}_codes"
-    label_dir = f"{args.code_path}/imagenet{args.image_size}_labels"
-    assert os.path.exists(feature_dir) and os.path.exists(label_dir), \
-        f"please first run: bash scripts/autoregressive/extract_codes_c2i.sh ..."
-    return CustomDataset(feature_dir, label_dir)
+    return get_code_dataset(args.code_path)

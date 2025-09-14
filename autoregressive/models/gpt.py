@@ -1,6 +1,6 @@
 # Modified from:
 #   VQGAN:    https://github.com/CompVis/taming-transformers/blob/master/taming/modules/transformer/mingpt.py
-#   DiT:      https://github.com/facebookresearch/DiT/blob/main/models.py  
+#   DiT:      https://github.com/facebookresearch/DiT/blob/main/models.py
 #   nanoGPT:  https://github.com/karpathy/nanoGPT/blob/master/model.py
 #   llama:    https://github.com/facebookresearch/llama/blob/main/llama/model.py
 #   gpt-fast: https://github.com/pytorch-labs/gpt-fast/blob/main/model.py
@@ -14,6 +14,17 @@ import torch.nn as nn
 from torch.nn import functional as F
 from utils.drop_path import DropPath
 
+# from liger_kernel.transformers import (
+#     LigerRMSNorm,
+#     LigerCrossEntropyLoss,
+#     liger_rotary_pos_emb,
+# )
+class LigerRMSNorm:
+    pass
+class LigerCrossEntropyLoss:
+    pass
+def liger_rotary_pos_emb(q, k, cos, sin):
+    pass
 
 def find_multiple(n: int, k: int):
     if n % k == 0:
@@ -48,6 +59,9 @@ class ModelArgs:
     block_size: int = 256
     max_batch_size: int = 32
     max_seq_len: int = 2048
+
+    use_liger: bool = False
+    fp32_attention: bool = False
 
 
 #################################################################################
@@ -147,6 +161,12 @@ class RMSNorm(torch.nn.Module):
         output = self._norm(x.float()).type_as(x)
         return output * self.weight
 
+class RMSNormLiger(LigerRMSNorm):
+    def __init__(self, dim: int, eps: float = 1e-5):
+        super().__init__(hidden_size=dim, eps=eps)
+    
+    def forward(self, x):
+        return super().forward(x)
 
 class FeedForward(nn.Module):
     def __init__(self, config: ModelArgs):
@@ -188,6 +208,7 @@ class KVCache(nn.Module):
 class Attention(nn.Module):
     def __init__(self, config: ModelArgs):
         super().__init__()
+        self.config = config
         assert config.dim % config.n_head == 0
         self.dim = config.dim
         self.head_dim = config.dim // config.n_head
@@ -216,9 +237,14 @@ class Attention(nn.Module):
         xq = xq.view(bsz, seqlen, self.n_head, self.head_dim)
         xk = xk.view(bsz, seqlen, self.n_kv_head, self.head_dim)
         xv = xv.view(bsz, seqlen, self.n_kv_head, self.head_dim)
-        
-        xq = apply_rotary_emb(xq, freqs_cis)
-        xk = apply_rotary_emb(xk, freqs_cis)
+
+        if self.config.use_liger:
+            xq, xk = liger_rotary_pos_emb(
+                q=xq, k=xk, cos=freqs_cis[..., 0], sin=freqs_cis[..., 1]
+            )
+        else:
+            xq = apply_rotary_emb(xq, freqs_cis)
+            xk = apply_rotary_emb(xk, freqs_cis)
 
         xq, xk, xv = map(lambda x: x.transpose(1, 2), (xq, xk, xv))
 
@@ -229,13 +255,23 @@ class Attention(nn.Module):
         keys = keys.repeat_interleave(self.n_head // self.n_kv_head, dim=1)
         values = values.repeat_interleave(self.n_head // self.n_kv_head, dim=1)
 
-        output = F.scaled_dot_product_attention(
-            xq, keys, values, 
-            attn_mask=mask, 
-            is_causal=True if mask is None else False, # is_causal=False is for KV cache
-            dropout_p=self.attn_dropout_p if self.training else 0)            
-        
-        output = output.transpose(1, 2).contiguous().view(bsz, seqlen, self.dim)
+        if self.config.fp32_attention:
+            # Force fp32 for attention computation to improve numerical stability
+            with torch.cuda.amp.autocast(enabled=False):
+                output = F.scaled_dot_product_attention(
+                    xq.float(), keys.float(), values.float(), 
+                    attn_mask=mask, 
+                    is_causal=True if mask is None else False, # is_causal=False is for KV cache
+                    dropout_p=self.attn_dropout_p if self.training else 0)            
+            output = output.transpose(1, 2).contiguous().view(bsz, seqlen, self.dim).type_as(xq)
+        else:
+            # Use mixed precision for attention
+            output = F.scaled_dot_product_attention(
+                xq, keys, values, 
+                attn_mask=mask, 
+                is_causal=True if mask is None else False, # is_causal=False is for KV cache
+                dropout_p=self.attn_dropout_p if self.training else 0)            
+            output = output.transpose(1, 2).contiguous().view(bsz, seqlen, self.dim)
 
         output = self.resid_dropout(self.wo(output))
         return output
@@ -246,8 +282,12 @@ class TransformerBlock(nn.Module):
         super().__init__()
         self.attention = Attention(config)
         self.feed_forward = FeedForward(config)
-        self.attention_norm = RMSNorm(config.dim, eps=config.norm_eps)
-        self.ffn_norm = RMSNorm(config.dim, eps=config.norm_eps)
+        if config.use_liger:
+            self.attention_norm = RMSNormLiger(config.dim, eps=config.norm_eps)
+            self.ffn_norm = RMSNormLiger(config.dim, eps=config.norm_eps)
+        else:
+            self.attention_norm = RMSNorm(config.dim, eps=config.norm_eps)
+            self.ffn_norm = RMSNorm(config.dim, eps=config.norm_eps)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
     def forward(
@@ -283,14 +323,23 @@ class Transformer(nn.Module):
             self.layers.append(TransformerBlock(config, dpr[layer_id]))
 
         # output layer
-        self.norm = RMSNorm(config.dim, eps=config.norm_eps)
+        if self.config.use_liger:
+            self.norm = RMSNormLiger(config.dim, eps=config.norm_eps)
+        else:
+            self.norm = RMSNorm(config.dim, eps=config.norm_eps)
         self.output = nn.Linear(config.dim, config.vocab_size, bias=False)
 
-        # 2d rotary pos embedding
-        grid_size = int(self.block_size ** 0.5)
-        assert grid_size * grid_size == self.block_size
-        self.freqs_cis = precompute_freqs_cis_2d(grid_size, self.config.dim // self.config.n_head, self.config.rope_base, self.cls_token_num)
-        
+        if self.config.use_liger:
+            self.cross_entropy_none = LigerCrossEntropyLoss(reduction="none")
+            self.cross_entropy_mean = LigerCrossEntropyLoss(reduction="mean")
+
+        self.freqs_cis = precompute_freqs_cis(
+            self.block_size,
+            self.config.dim // self.config.n_head,
+            self.config.rope_base,
+            self.cls_token_num,
+        )
+
         # KVCache
         self.max_batch_size = -1
         self.max_seq_length = -1
@@ -325,9 +374,12 @@ class Transformer(nn.Module):
 
         causal_mask = torch.tril(torch.ones(self.max_seq_length, self.max_seq_length, dtype=torch.bool))
         self.causal_mask = causal_mask.unsqueeze(0).repeat(self.max_batch_size, 1, 1)
-        grid_size = int(self.config.block_size ** 0.5)
-        assert grid_size * grid_size == self.block_size
-        self.freqs_cis = precompute_freqs_cis_2d(grid_size, self.config.dim // self.config.n_head, self.config.rope_base, self.cls_token_num)
+        self.freqs_cis = precompute_freqs_cis(
+            self.config.block_size,
+            self.config.dim // self.config.n_head,
+            self.config.rope_base,
+            self.cls_token_num,
+        )
 
     def forward(
         self, 
@@ -349,12 +401,12 @@ class Transformer(nn.Module):
                 token_embeddings = self.cls_embedding(cond_idx, train=self.training)[:,:self.cls_token_num]
             else: # decode_n_tokens(kv cache) in inference
                 token_embeddings = self.tok_embeddings(idx)
-            
+
             bs = token_embeddings.shape[0]
             mask = self.causal_mask[:bs, None, input_pos]
             h = self.tok_dropout(token_embeddings)
             self.freqs_cis = self.freqs_cis
-        
+
         if self.training:
             freqs_cis = self.freqs_cis[:token_embeddings.shape[1]]
         else:
@@ -362,35 +414,47 @@ class Transformer(nn.Module):
         # transformer blocks
         for layer in self.layers:
             h = layer(h, freqs_cis, input_pos, mask)
-        
+
         # output layers
         h = self.norm(h)
         logits = self.output(h).float()
-        
+
         if self.training:
             logits = logits[:, self.cls_token_num - 1:].contiguous()
 
         # if we are given some desired targets also calculate the loss
         loss = None
         if valid is not None:
-            loss_all = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), reduction='none')
+            if False and self.config.use_liger:
+                loss_all = self.cross_entropy_none(
+                    logits.view(-1, logits.size(-1)), targets.view(-1).long()
+                )
+            else:
+                loss_all = F.cross_entropy(
+                    logits.view(-1, logits.size(-1)),
+                    targets.view(-1).long(),
+                    reduction="none",
+                )
             valid_all = valid[:,None].repeat(1, targets.shape[1]).view(-1)
             loss = (loss_all * valid_all).sum() / max(valid_all.sum(), 1)
         elif targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+            if False and self.config.use_liger:
+                loss = self.cross_entropy_mean(
+                    logits.view(-1, logits.size(-1)), targets.view(-1).long()
+                )
+            else:
+                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1).long())
 
         return logits, loss
-
 
     def get_fsdp_wrap_module_list(self) -> List[nn.Module]:
         return list(self.layers)
 
 
-
 #################################################################################
 #                      Rotary Positional Embedding Functions                    #
 #################################################################################
-# https://github.com/pytorch-labs/gpt-fast/blob/main/model.py 
+# https://github.com/pytorch-labs/gpt-fast/blob/main/model.py
 def precompute_freqs_cis(seq_len: int, n_elem: int, base: int = 10000, cls_token_num=120):
     freqs = 1.0 / (base ** (torch.arange(0, n_elem, 2)[: (n_elem // 2)].float() / n_elem))
     t = torch.arange(seq_len, device=freqs.device)
@@ -430,7 +494,6 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor):
     return x_out2.type_as(x)
 
 
-
 #################################################################################
 #                                GPT Configs                                    #
 #################################################################################
@@ -459,9 +522,13 @@ def GPT_L(**kwargs):
 
 def GPT_B(**kwargs):
     return Transformer(ModelArgs(n_layer=12, n_head=12, dim=768, **kwargs)) # 111M
-        
+
+
+def GPT_Mini(**kwargs):
+    return Transformer(ModelArgs(n_layer=10, n_head=10, dim=640, **kwargs))  # 111M
+
 
 GPT_models = {
     'GPT-B': GPT_B, 'GPT-L': GPT_L, 'GPT-XL': GPT_XL, 'GPT-XXL': GPT_XXL, 'GPT-XXXL': GPT_XXXL,
-    'GPT-1B': GPT_1B, 'GPT-3B': GPT_3B, 'GPT-7B': GPT_7B, 
+    'GPT-1B': GPT_1B, 'GPT-3B': GPT_3B, 'GPT-7B': GPT_7B, 'GPT-Mini': GPT_Mini,
 }

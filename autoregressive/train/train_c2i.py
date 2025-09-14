@@ -2,22 +2,34 @@
 #   fast-DiT: https://github.com/chuanyangjin/fast-DiT/blob/main/train.py
 #   nanoGPT: https://github.com/karpathy/nanoGPT/blob/master/model.py
 import torch
+
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
+from autoregressive.sample.sample_c2i_lib import do_sample
 from glob import glob
 from copy import deepcopy
 import os
 import time
 import inspect
 import argparse
+import yaml
 
-from utils.logger import create_logger
+try:
+    import wandb
+except ImportError:
+    pass
+
+import sys
+
+sys.path.append("/root/kongly/AR/LlamaGen")
+from utils.logger import create_logger, setup_wandb
 from utils.distributed import init_distributed_mode
 from utils.ema import update_ema, requires_grad
+from utils.lr_scheduler import CosineAnnealingWarmupLR
 from dataset.build import build_dataset
 from autoregressive.models.gpt import GPT_models
 
@@ -35,20 +47,47 @@ def creat_optimizer(model, weight_decay, learning_rate, betas, logger):
     decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
     nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
     optim_groups = [
-        {'params': decay_params, 'weight_decay': weight_decay},
-        {'params': nodecay_params, 'weight_decay': 0.0}
+        {"params": decay_params, "weight_decay": weight_decay},
+        {"params": nodecay_params, "weight_decay": 0.0},
     ]
     num_decay_params = sum(p.numel() for p in decay_params)
     num_nodecay_params = sum(p.numel() for p in nodecay_params)
-    logger.info(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
-    logger.info(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+    logger.info(
+        f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters"
+    )
+    logger.info(
+        f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
+    )
     # Create AdamW optimizer and use the fused version if it is available
-    fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+    fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
     extra_args = dict(fused=True) if fused_available else dict()
-    optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+    optimizer = torch.optim.AdamW(
+        optim_groups, lr=learning_rate, betas=betas, **extra_args
+    )
     logger.info(f"using fused AdamW: {fused_available}")
     return optimizer
 
+
+def save_checkpoint(
+    logger, model, optimizer, scheduler, ema, train_steps, epoch, checkpoint_dir, args
+):
+    logger.info(f"Saving checkpoint at step {train_steps} (epoch {epoch})...")
+    if not args.no_compile:
+        model_weight = model.module._orig_mod.state_dict()
+    else:
+        model_weight = model.module.state_dict()
+    checkpoint = {
+        "model": model_weight,
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "steps": train_steps,
+        "args": vars(args),
+    }
+    if args.ema:
+        checkpoint["ema"] = ema.state_dict()
+    checkpoint_path = f"{checkpoint_dir}/{epoch}_{train_steps:07d}.pt"
+    torch.save(checkpoint, checkpoint_path)
+    logger.info(f"Saved checkpoint to {checkpoint_path}")
 
 
 #################################################################################
@@ -56,10 +95,12 @@ def creat_optimizer(model, weight_decay, learning_rate, betas, logger):
 #################################################################################
 def main(args):
     assert torch.cuda.is_available(), "Training currently requires at least one GPU."
-    
+
     # Setup DDP:
     init_distributed_mode(args)
-    assert args.global_batch_size % dist.get_world_size() == 0, f"Batch size must be divisible by world size."
+    assert (
+        args.global_batch_size % dist.get_world_size() == 0
+    ), f"Batch size must be divisible by world size."
     rank = dist.get_rank()
     device = rank % torch.cuda.device_count()
     seed = args.global_seed * dist.get_world_size() + rank
@@ -68,40 +109,38 @@ def main(args):
 
     # Setup an experiment folder:
     if rank == 0:
-        os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
+        os.makedirs(
+            args.results_dir, exist_ok=True
+        )  # Make results folder (holds all experiment subfolders)
         experiment_index = len(glob(f"{args.results_dir}/*"))
-        model_string_name = args.gpt_model.replace("/", "-")  # e.g., GPT-XL/2 --> GPT-XL-2 (for naming folders)
+        model_string_name = args.gpt_model.replace(
+            "/", "-"
+        )  # e.g., GPT-XL/2 --> GPT-XL-2 (for naming folders)
         experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
-        checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
+        checkpoint_dir = (
+            f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
+        )
         os.makedirs(checkpoint_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
         logger.info(f"Experiment directory created at {experiment_dir}")
 
-        time_record = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-        cloud_results_dir = f"{args.cloud_save_path}/{time_record}"
-        cloud_checkpoint_dir = f"{cloud_results_dir}/{experiment_index:03d}-{model_string_name}/checkpoints"
-        os.makedirs(cloud_checkpoint_dir, exist_ok=True)
-        logger.info(f"Experiment directory created in cloud at {cloud_checkpoint_dir}")
-    
     else:
         logger = create_logger(None)
 
-    # training args
     logger.info(f"{args}")
-
-    # training env
-    logger.info(f"Starting rank={rank}, seed={seed}, world_size={dist.get_world_size()}.")
-
+    logger.info(
+        f"Starting rank={rank}, seed={seed}, world_size={dist.get_world_size()}."
+    )
 
     # Setup model
     if args.drop_path_rate > 0.0:
         dropout_p = 0.0
     else:
         dropout_p = args.dropout_p
-    latent_size = args.image_size // args.downsample_size
+    latent_size = args.latent_size
     model = GPT_models[args.gpt_model](
         vocab_size=args.vocab_size,
-        block_size=latent_size ** 2,
+        block_size=latent_size,
         num_classes=args.num_classes,
         cls_token_num=args.cls_token_num,
         model_type=args.gpt_type,
@@ -109,16 +148,36 @@ def main(args):
         ffn_dropout_p=dropout_p,
         drop_path_rate=args.drop_path_rate,
         token_dropout_p=args.token_dropout_p,
+        use_liger=args.use_liger,
+        fp32_attention=args.fp32_attention,
     ).to(device)
-    logger.info(f"GPT Parameters: {sum(p.numel() for p in model.parameters()):,}")
+
+    wandb_extra_config = {}
+
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    non_embedding_params = sum(
+        p.numel() for n, p in model.named_parameters() if ("embed" not in n and p.requires_grad)
+    )
+    logger.info(f"GPT Parameters: {total_params}, Non-embedding Parameters: {non_embedding_params}")
+    wandb_extra_config['total_parameters'] = total_params
+    wandb_extra_config['trainable_parameters'] = trainable_params
+    wandb_extra_config['non_embedding_parameters'] = non_embedding_params
 
     if args.ema:
-        ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
+        ema = deepcopy(model).to(
+            device
+        )  # Create an EMA of the model for use after training
         requires_grad(ema, False)
-        logger.info(f"EMA Parameters: {sum(p.numel() for p in ema.parameters()):,}")
+        ema_params = sum(p.numel() for p in ema.parameters())
+        logger.info(f"EMA Parameters: {ema_params:,}")
+
+        wandb_extra_config['ema_parameters'] = ema_params
 
     # Setup optimizer
-    optimizer = creat_optimizer(model, args.weight_decay, args.lr, (args.beta1, args.beta2), logger)
+    optimizer = creat_optimizer(
+        model, args.weight_decay, args.lr, (args.beta1, args.beta2), logger
+    )
 
     # Setup data:
     dataset = build_dataset(args)
@@ -127,7 +186,7 @@ def main(args):
         num_replicas=dist.get_world_size(),
         rank=rank,
         shuffle=True,
-        seed=args.global_seed
+        seed=args.global_seed,
     )
     loader = DataLoader(
         dataset,
@@ -136,22 +195,59 @@ def main(args):
         sampler=sampler,
         num_workers=args.num_workers,
         pin_memory=True,
-        drop_last=True
+        drop_last=True,
     )
-    flip_info = 'with' if dataset.flip else 'without'
-    aug_info = 10 if 'ten_crop' in dataset.feature_dir else 1
-    aug_info = 2 * aug_info if dataset.aug_feature_dir is not None else aug_info
-    logger.info(f"Dataset contains {len(dataset):,} images ({args.code_path}) "
-                f"{flip_info} flip augmentation and {aug_info} crop augmentation")
 
+    # Setup learning rate scheduler
+    total_steps = args.epochs * len(loader)
+
+    # Calculate warmup steps from warmup epochs if available
+    if hasattr(args, "warmup_epochs") and args.warmup_epochs is not None:
+        warmup_steps = args.warmup_epochs * len(loader)
+        logger.info(
+            f"Using warmup_epochs: {args.warmup_epochs}, calculated warmup_steps: {warmup_steps}"
+        )
+    else:
+        warmup_steps = args.warmup_steps
+        logger.info(f"Using warmup_steps directly: {warmup_steps}")
+
+    scheduler = CosineAnnealingWarmupLR(
+        optimizer,
+        init_lr=args.init_lr,
+        base_lr=args.lr,
+        final_lr=args.final_lr,
+        warmup_steps=warmup_steps,
+        total_steps=total_steps,
+    )
+
+    # Log dataset info to wandb
+    wandb_extra_config['dataset_size'] = len(dataset)
+    wandb_extra_config['batch_size_per_gpu'] = int(
+        args.global_batch_size // dist.get_world_size()
+    )
+    wandb_extra_config['total_steps_per_epoch'] = len(loader)
+    wandb_extra_config['total_training_steps'] = total_steps
+
+    use_wandb = setup_wandb(args, experiment_dir if rank == 0 else None, logger, rank, wandb_extra_config)
     # Prepare models for training:
     if args.gpt_ckpt:
-        checkpoint = torch.load(args.gpt_ckpt, map_location="cpu")
+        checkpoint = torch.load(args.gpt_ckpt, map_location="cpu", weights_only=False)
         model.load_state_dict(checkpoint["model"])
         if args.ema:
-            ema.load_state_dict(checkpoint["ema"] if "ema" in checkpoint else checkpoint["model"])
+            ema.load_state_dict(
+                checkpoint["ema"] if "ema" in checkpoint else checkpoint["model"]
+            )
         optimizer.load_state_dict(checkpoint["optimizer"])
-        train_steps = checkpoint["steps"] if "steps" in checkpoint else int(args.gpt_ckpt.split('/')[-1].split('.')[0])
+
+        # Load scheduler state if available
+        if "scheduler" in checkpoint:
+            scheduler.load_state_dict(checkpoint["scheduler"])
+
+        train_steps = (
+            checkpoint["steps"]
+            if "steps" in checkpoint
+            else int(args.gpt_ckpt.split("/")[-1].split(".")[0].split("_")[-1])
+        )
         start_epoch = int(train_steps / int(len(dataset) / args.global_batch_size))
         train_steps = int(start_epoch * int(len(dataset) / args.global_batch_size))
         del checkpoint
@@ -161,134 +257,240 @@ def main(args):
         train_steps = 0
         start_epoch = 0
         if args.ema:
-            update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
+            update_ema(
+                ema, model, decay=0
+            )  # Ensure EMA is initialized with synced weights
 
     if not args.no_compile:
         logger.info("compiling the model... (may take several minutes)")
-        model = torch.compile(model) # requires PyTorch 2.0        
-    
+        model = torch.compile(model)  # requires PyTorch 2.0
+
     model = DDP(model.to(device), device_ids=[args.gpu])
     model.train()  # important! This enables embedding dropout for classifier-free guidance
     if args.ema:
         ema.eval()  # EMA model should always be in eval mode
 
-    ptdtype = {'none': torch.float32, 'bf16': torch.bfloat16, 'fp16': torch.float16}[args.mixed_precision]
+    ptdtype = {"none": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}[
+        args.mixed_precision
+    ]
     # initialize a GradScaler. If enabled=False scaler is a no-op
-    scaler = torch.cuda.amp.GradScaler(enabled=(args.mixed_precision =='fp16'))
-    # Variables for monitoring/logging purposes:
-    log_steps = 0
-    running_loss = 0
-    start_time = time.time()
+    scaler = torch.cuda.amp.GradScaler(enabled=(args.mixed_precision == "fp16"))
+
+    if hasattr(args, "ckpt_every_epoch") and args.ckpt_every_epoch is not None:
+        ckpt_every = args.ckpt_every_epoch * len(loader)
+        logger.info(
+            f"Using ckpt_every_epoch: {args.ckpt_every_epoch}, calculated ckpt_every: {ckpt_every}"
+        )
+    else:
+        ckpt_every = args.ckpt_every_iter if hasattr(args, "ckpt_every_iter") else None
+        logger.info(f"Using ckpt_every directly: {ckpt_every}")
 
     logger.info(f"Training for {args.epochs} epochs...")
+    total_steps_remaining = args.epochs * len(loader) - train_steps
+
+    # Initialize skip counter for gradient norm threshold
+    skipped_updates = 0
+    skipped_updates_recent_100_steps = [0] * 100  # Track skips in the last 100 steps
+    grad_norm_threshold = getattr(args, 'grad_norm_threshold', float('inf'))  # Default to inf (no skipping)
+    logger.info(f"Gradient norm threshold: {grad_norm_threshold}")
+
+    check_grad_norm_for_skip = args.check_grad_norm_for_skip
+
     for epoch in range(start_epoch, args.epochs):
         sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
-        for x, y in loader:
-            x = x.to(device, non_blocking=True)
-            y = y.to(device, non_blocking=True)
+        for x, y, _ in loader:
+            step_start_time = data_start_time = time.time()
+            x = x.to(device, non_blocking=True).int()
+            y = y.to(device, non_blocking=True).long()
             z_indices = x.reshape(x.shape[0], -1)
             c_indices = y.reshape(-1)
             assert z_indices.shape[0] == c_indices.shape[0]
-            with torch.cuda.amp.autocast(dtype=ptdtype):  
-                _, loss = model(cond_idx=c_indices, idx=z_indices[:,:-1], targets=z_indices)
-            # backward pass, with gradient scaling if training in fp16         
-            scaler.scale(loss).backward()
-            if args.max_grad_norm != 0.0:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-            # step the optimizer and scaler if training in fp16
-            scaler.step(optimizer)
-            scaler.update()
-            # flush the gradients as soon as we can, no need for this memory anymore
-            optimizer.zero_grad(set_to_none=True)
-            if args.ema:
-                update_ema(ema, model.module._orig_mod if not args.no_compile else model.module)
+            data_time = time.time() - data_start_time
 
-            # Log loss values:
-            running_loss += loss.item()
-            log_steps += 1
+            with torch.cuda.amp.autocast(dtype=ptdtype):
+                _, loss = model(
+                    cond_idx=c_indices, idx=z_indices[:, :-1], targets=z_indices
+                )
+            # backward pass, with gradient scaling if training in fp16
+            scaler.scale(loss).backward()
+
+            # Need to unscale gradients to get true gradient norm
+            scaler.unscale_(optimizer)
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), args.max_grad_norm
+            )
+
+            if check_grad_norm_for_skip:
+                # Synchronize gradient norm across all GPUs for consistent skip decision
+                grad_norm_tensor = torch.tensor(grad_norm, device=device)
+                dist.all_reduce(grad_norm_tensor, op=dist.ReduceOp.MAX)  # Use max grad norm across all GPUs
+                max_grad_norm = grad_norm_tensor.item()
+
+                # Check if maximum gradient norm across all GPUs exceeds threshold
+                skip_update = max_grad_norm > grad_norm_threshold
+            else:
+                skip_update = False
+            skipped_updates_recent_100_steps.pop(0)
+            skipped_updates_recent_100_steps.append(1 if skip_update else 0)
+            recent_skip_rate = sum(skipped_updates_recent_100_steps) / 100
+
+            if not skip_update:
+                # step the optimizer and scaler if training in fp16
+                scaler.step(optimizer)
+                scaler.update()
+                scheduler.step()  # Update the learning rate
+                # flush the gradients as soon as we can, no need for this memory anymore
+                optimizer.zero_grad(set_to_none=True)
+                if args.ema:
+                    update_ema(
+                        ema, model.module._orig_mod if not args.no_compile else model.module
+                    )
+            else:
+                # Skip the update and zero gradients
+                skipped_updates += 1  # Increment on all GPUs to keep count synchronized
+                if rank == 0:  # Only log from rank 0 to avoid duplicate messages
+                    logger.info(f"Skipped update due to large gradient norm: max_grad_norm={max_grad_norm:.4f} > {grad_norm_threshold} (local_grad_norm={grad_norm:.4f})")
+                optimizer.zero_grad(set_to_none=True)
+                # Update scaler for consistency but don't step optimizer
+                scaler.update()
+                scheduler.step()  # Update the learning rate
+
+            # Total step time
+            step_time = time.time() - step_start_time
+
             train_steps += 1
-            if train_steps % args.log_every == 0:
-                # Measure training speed:
-                torch.cuda.synchronize()
-                end_time = time.time()
-                steps_per_sec = log_steps / (end_time - start_time)
-                # Reduce loss history over all processes:
-                avg_loss = torch.tensor(running_loss / log_steps, device=device)
-                dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
-                avg_loss = avg_loss.item() / dist.get_world_size()
-                logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
-                # Reset monitoring variables:
-                running_loss = 0
-                log_steps = 0
-                start_time = time.time()
+            if train_steps % args.eval_every == 0:
+                model.eval()
+
+                model.train()
 
             # Save checkpoint:
-            if train_steps % args.ckpt_every == 0 and train_steps > 0:
+            if ckpt_every is not None and train_steps % ckpt_every == 0 and train_steps > 0:
                 if rank == 0:
-                    if not args.no_compile:
-                        model_weight = model.module._orig_mod.state_dict()
-                    else:
-                        model_weight = model.module.state_dict()  
-                    checkpoint = {
-                        "model": model_weight,
-                        "optimizer": optimizer.state_dict(),
-                        "steps": train_steps,
-                        "args": args
-                    }
-                    if args.ema:
-                        checkpoint["ema"] = ema.state_dict()
-                    if not args.no_local_save:
-                        checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
-                        torch.save(checkpoint, checkpoint_path)
-                        logger.info(f"Saved checkpoint to {checkpoint_path}")
-                    
-                    cloud_checkpoint_path = f"{cloud_checkpoint_dir}/{train_steps:07d}.pt"
-                    torch.save(checkpoint, cloud_checkpoint_path)
-                    logger.info(f"Saved checkpoint in cloud to {cloud_checkpoint_path}")
+                    checkpoint_start_time = time.time()
+                    save_checkpoint(
+                        logger,
+                        model,
+                        optimizer,
+                        scheduler,
+                        ema if args.ema else None,
+                        train_steps,
+                        epoch,
+                        checkpoint_dir,
+                        args,
+                    )
+                    ckpt_time = time.time() - checkpoint_start_time
+                    # Log checkpoint save to wandb
+                    if use_wandb:
+                        wandb.log(
+                            {
+                                "timing/save_checkpoint": ckpt_time,
+                            },
+                            step=train_steps,
+                        )
+
                 dist.barrier()
 
-    model.eval()  # important! This disables randomized embedding dropout
-    # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
+            # Reduce loss history over all processes:
+            reduce_tensor = torch.tensor(
+                [
+                    loss.item(),
+                    data_time,
+                    step_time,
+                    grad_norm,  # Use synchronized max grad norm for logging
+                ],
+                device=device,
+            )
+            dist.all_reduce(reduce_tensor, op=dist.ReduceOp.SUM)
+            avg_step_loss, avg_data_time, avg_step_time, avg_grad_norm = (
+                reduce_tensor / dist.get_world_size()
+            ).tolist()
+
+            # Calculate ETA
+            total_steps_remaining -= 1
+            avg_step_time = (
+                step_time
+                if train_steps == 0
+                else (avg_step_time * train_steps + step_time) / (train_steps + 1)
+            )
+            eta_seconds = avg_step_time * total_steps_remaining
+            eta_minutes, eta_seconds = divmod(eta_seconds, 60)
+            eta_hours, eta_minutes = divmod(eta_minutes, 60)
+
+            # Log ETA
+            eta_msg = f"ETA: {int(eta_hours):02d}:{int(eta_minutes):02d}:{int(eta_seconds):02d}"
+
+            # Log to console
+            log_msg = f"(step={train_steps:07d}) Train Step Loss: {avg_step_loss:.4f},"
+            log_msg += f", Data Time: {avg_data_time*1000:.1f}ms, Step Time: {avg_step_time*1000:.1f}ms"
+            log_msg += f", Grad Norm: {avg_grad_norm:.4f}"
+            if skip_update:
+                log_msg += f", SKIPPED UPDATE (max_grad_norm={avg_grad_norm:.4f})"
+            log_msg += f", {eta_msg}"
+            logger.info(log_msg)
+
+            # Log to wandb
+            if use_wandb and rank == 0:
+                # Get current learning rate
+                current_lr = optimizer.param_groups[0]["lr"]
+                wandb_logs = {
+                    "train/loss": avg_step_loss,
+                    "train/epoch": epoch,
+                    "train/step": train_steps,
+                    "train/learning_rate": current_lr,
+                    "timing/data_time_ms": avg_data_time * 1000,
+                    "timing/step_time_ms": avg_step_time * 1000,
+                    "train/grad_norm": avg_grad_norm,
+                    "skipping/skipped_updates_total": skipped_updates,
+                    "skipping/skip_rate": (
+                        skipped_updates / train_steps if train_steps > 0 else 0
+                    ),
+                    "skipping/skip_rate_recent_100_steps": recent_skip_rate,
+                }
+                if skip_update:
+                    wandb_logs["train/update_skipped"] = 1
+                else:
+                    wandb_logs["train/update_skipped"] = 0
+
+                wandb.log(wandb_logs, step=train_steps)
+
+    if rank == 0:
+        save_checkpoint(
+            logger,
+            model,
+            optimizer,
+            scheduler,
+            ema if args.ema else None,
+            train_steps,
+            epoch,
+            checkpoint_dir,
+            args,
+        )
 
     logger.info("Done!")
-    dist.destroy_process_group()
 
+    if use_wandb and rank == 0:
+        wandb.finish()
+
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--code-path", type=str, required=True)
-    parser.add_argument("--cloud-save-path", type=str, required=True, help='please specify a cloud disk path, if not, local path')
-    parser.add_argument("--no-local-save", action='store_true', help='no save checkpoints to local path for limited disk volume')
-    parser.add_argument("--gpt-model", type=str, choices=list(GPT_models.keys()), default="GPT-B")
-    parser.add_argument("--gpt-ckpt", type=str, default=None, help="ckpt path for resume training")
-    parser.add_argument("--gpt-type", type=str, choices=['c2i', 't2i'], default="c2i", help="class-conditional or text-conditional")
-    parser.add_argument("--vocab-size", type=int, default=16384, help="vocabulary size of visual tokenizer")
-    parser.add_argument("--ema", action='store_true', help="whether using ema training")
-    parser.add_argument("--cls-token-num", type=int, default=1, help="max token number of condition input")
-    parser.add_argument("--dropout-p", type=float, default=0.1, help="dropout_p of resid_dropout_p and ffn_dropout_p")
-    parser.add_argument("--token-dropout-p", type=float, default=0.1, help="dropout_p of token_dropout_p")
-    parser.add_argument("--drop-path-rate", type=float, default=0.0, help="using stochastic depth decay")
-    parser.add_argument("--no-compile", action='store_true')
-    parser.add_argument("--results-dir", type=str, default="results")
-    parser.add_argument("--dataset", type=str, default='imagenet_code')
-    parser.add_argument("--image-size", type=int, choices=[256, 384, 448, 512], default=256)
-    parser.add_argument("--downsample-size", type=int, choices=[8, 16], default=16)
-    parser.add_argument("--num-classes", type=int, default=1000)
-    parser.add_argument("--epochs", type=int, default=300)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--weight-decay", type=float, default=5e-2, help="Weight decay to use")
-    parser.add_argument("--beta1", type=float, default=0.9, help="beta1 parameter for the Adam optimizer")
-    parser.add_argument("--beta2", type=float, default=0.95, help="beta2 parameter for the Adam optimizer")
-    parser.add_argument("--max-grad-norm", default=1.0, type=float, help="Max gradient norm.")
-    parser.add_argument("--global-batch-size", type=int, default=256)
-    parser.add_argument("--global-seed", type=int, default=0)
-    parser.add_argument("--num-workers", type=int, default=24)
-    parser.add_argument("--log-every", type=int, default=100)
-    parser.add_argument("--ckpt-every", type=int, default=5000)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
-    parser.add_argument("--mixed-precision", type=str, default='bf16', choices=["none", "fp16", "bf16"]) 
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="/root/kongly/AR/LlamaGen/autoregressive/train/configs/test.yaml",
+    )
     args = parser.parse_args()
-    main(args)
+
+    with open(args.config, "r") as file:
+        config = yaml.load(file, Loader=yaml.FullLoader)
+
+    class Args:
+        def __init__(self, config):
+            for key, value in config.items():
+                setattr(self, key, value)
+
+    main(Args(config))
