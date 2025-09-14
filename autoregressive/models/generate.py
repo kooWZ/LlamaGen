@@ -109,7 +109,8 @@ def decode_n_tokens(
     new_tokens, new_probs = [], []
     cfg_flag = True
     for i in range(num_new_tokens):
-        with torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=False, enable_math=True): # Actually better for Inductor to codegen attention here
+        with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.MATH):
+        # with torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=False, enable_math=True): # Actually better for Inductor to codegen attention here
             if cfg_interval > -1 and i > cfg_interval:
                 cfg_flag = False
             next_token, next_prob = decode_one_token(
@@ -119,7 +120,7 @@ def decode_n_tokens(
             new_tokens.append(next_token.clone())
             new_probs.append(next_prob.clone())
             cur_token = next_token.view(-1, 1)
-    
+
     return new_tokens, new_probs
 
 
