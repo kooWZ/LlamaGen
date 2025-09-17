@@ -1,4 +1,3 @@
-import argparse
 import io
 import os
 import random
@@ -17,9 +16,11 @@ import tensorflow.compat.v1 as tf
 from scipy import linalg
 from tqdm.auto import tqdm
 
+base_path = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../"))
+
 INCEPTION_V3_URL = "https://openaipublic.blob.core.windows.net/diffusion/jul-2021/ref_batches/classify_image_graph_def.pb"
 INCEPTION_V3_PATH = (
-    "/root/kongly/AR/LlamaGen/evaluations/c2i/classify_image_graph_def.pb"
+    "classify_image_graph_def.pb"
 )
 
 FID_POOL_NAME = "pool_3:0"
@@ -28,7 +29,9 @@ FID_SPATIAL_NAME = "mixed_6/conv:0"
 
 def evaluate(
     sample_batch,
-    ref_batch="/root/kongly/AR/LlamaGen/dataset/ImageNet-1k/reference/256/VIRTUAL_imagenet256_labeled.npz",
+    ref_batch=os.path.join(
+        base_path, "dataset/ImageNet-1k/reference/VIRTUAL_imagenet256_labeled.npz"
+    ),
 ):
     config = tf.ConfigProto(
         allow_soft_placement=True  # allows DecodeJpeg to run on CPU in Inception graph

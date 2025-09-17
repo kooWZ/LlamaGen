@@ -20,7 +20,11 @@ from flextok.utils.misc import get_bf16_context, get_generator
 
 
 def do_sample(gpt_model, args, rank, device, npz_path):
-    vq_model = FlexTokFromHub.from_pretrained(args.vq_ckpt)
+    vq_ckpt = args.vq_ckpt
+    if not os.path.exists(vq_ckpt):
+        vq_ckpt = os.path.join(llamagen_path, vq_ckpt)
+    assert os.path.exists(vq_ckpt), f"VQ model checkpoint {vq_ckpt} does not exist!"
+    vq_model = FlexTokFromHub.from_pretrained(vq_ckpt)
     vq_model.to(device)
     vq_model.eval()
     dist.barrier()
