@@ -95,4 +95,9 @@ def get_code_dataset(path):
     return full_dataset
 
 def build_imagenet_code(args):
-    return get_code_dataset(args.code_path)
+    code_path = args.code_path
+    if not os.path.exists(code_path):
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        code_path = os.path.join(base_path, code_path)
+        assert os.path.exists(code_path), f"code_path {code_path} does not exist"
+    return get_code_dataset(code_path)

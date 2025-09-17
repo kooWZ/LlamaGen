@@ -109,24 +109,34 @@ def main(args):
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
 
+    def check_results_dir(path):
+        if os.path.exists(path):
+            return path
+        base_path = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../"))
+        new_path = os.path.join(base_path, path)
+        print("Using new results_dir path:", new_path)
+        return new_path
+
     # Setup an experiment folder:
     if rank == 0:
+        results_dir = check_results_dir(args.results_dir)
         os.makedirs(
-            args.results_dir, exist_ok=True
+            results_dir, exist_ok=True
         )  # Make results folder (holds all experiment subfolders)
-        experiment_index = len(glob(f"{args.results_dir}/*"))
+        experiment_index = len(glob(f"{results_dir}/*"))
         model_string_name = args.gpt_model.replace(
             "/", "-"
         )  # e.g., GPT-XL/2 --> GPT-XL-2 (for naming folders)
-        experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
+        experiment_dir = f"{results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
         checkpoint_dir = (
             f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
         )
         os.makedirs(checkpoint_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
         logger.info(f"Experiment directory created at {experiment_dir}")
-
-    else:
+    dist.barrier()
+    if rank != 0:
+        results_dir = check_results_dir(args.results_dir)
         logger = create_logger(None)
 
     logger.info(f"{args}")
@@ -233,7 +243,12 @@ def main(args):
     use_wandb = setup_wandb(args, experiment_dir if rank == 0 else None, logger, rank, wandb_extra_config)
     # Prepare models for training:
     if args.gpt_ckpt:
-        checkpoint = torch.load(args.gpt_ckpt, map_location="cpu", weights_only=False)
+        gpt_ckpt = args.gpt_ckpt
+        if not os.path.exists(gpt_ckpt):
+            base_path = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../"))
+            gpt_ckpt = os.path.join(base_path, gpt_ckpt)
+            assert os.path.exists(gpt_ckpt), f"gpt_ckpt {gpt_ckpt} does not exist"
+        checkpoint = torch.load(gpt_ckpt, map_location="cpu", weights_only=False)
         model.load_state_dict(checkpoint["model"])
         if args.ema:
             ema.load_state_dict(
