@@ -11,16 +11,19 @@ from torchvision.utils import save_image
 import time
 import argparse
 import sys
+import os
 
-sys.path.append("/root/kongly/AR/LlamaGen")
+current_dir = os.path.dirname(os.path.abspath(__file__))
+llamagen_path = os.path.abspath(os.path.join(current_dir, "../../"))
+sys.path.append(llamagen_path)
 from autoregressive.models.gpt import GPT_models
 from autoregressive.models.generate import generate
 
-sys.path.append("/root/kongly/AR/LlamaGen/external_tokenizers/flextok")
-from external_tokenizers.flextok.flextok.flextok_wrapper import FlexTokFromHub
-from external_tokenizers.flextok.flextok.utils.misc import get_bf16_context
-from tqdm import tqdm
-from glob import glob
+flextok_path = os.path.abspath(
+    os.path.join(llamagen_path, "external_tokenizers/flextok")
+)
+sys.path.append(flextok_path)
+from flextok.flextok_wrapper import FlexTokFromHub
 
 
 def main(args):

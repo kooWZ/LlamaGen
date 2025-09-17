@@ -25,7 +25,9 @@ except ImportError:
 
 import sys
 
-sys.path.append("/root/kongly/AR/LlamaGen")
+current_dir = os.path.dirname(os.path.abspath(__file__))
+llamagen_path = os.path.abspath(os.path.join(current_dir, "../../"))
+sys.path.append(llamagen_path)
 from utils.logger import create_logger, setup_wandb
 from utils.distributed import init_distributed_mode
 from utils.ema import update_ema, requires_grad

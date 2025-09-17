@@ -5,14 +5,15 @@ import os
 import time
 import numpy as np
 import math
-import argparse
 import sys
 
-sys.path.append("/root/kongly/AR/LlamaGen")
-from autoregressive.models.gpt import GPT_models
+current_dir = os.path.dirname(os.path.abspath(__file__))
+llamagen_path = os.path.abspath(os.path.join(current_dir, "../../"))
+sys.path.append(llamagen_path)
 from autoregressive.models.generate import generate
 
-sys.path.append("/root/kongly/AR/LlamaGen/external_tokenizers/flextok")
+flextok_path = os.path.abspath(os.path.join(llamagen_path, "external_tokenizers/flextok"))
+sys.path.append(flextok_path)
 from flextok.flextok_wrapper import FlexTokFromHub
 from flextok.utils.demo import denormalize
 from flextok.utils.misc import get_bf16_context, get_generator

@@ -23,14 +23,19 @@ import numpy as np
 import argparse
 import sys
 
-sys.path.append("/root/kongly/AR/LlamaGen")
+current_dir = os.path.dirname(os.path.abspath(__file__))
+llamagen_path = os.path.abspath(os.path.join(current_dir, "../../"))
+sys.path.append(llamagen_path)
 from utils.distributed import init_distributed_mode
 from dataset.augmentation import center_crop_arr
 from dataset.build import build_dataset
 
-sys.path.append("/root/kongly/AR/LlamaGen/external_tokenizers/flextok")
-from external_tokenizers.flextok.flextok.flextok_wrapper import FlexTokFromHub
-from external_tokenizers.flextok.flextok.utils.misc import get_bf16_context
+flextok_path = os.path.abspath(
+    os.path.join(llamagen_path, "external_tokenizers/flextok")
+)
+sys.path.append(flextok_path)
+from flextok.flextok_wrapper import FlexTokFromHub
+from flextok.utils.misc import get_bf16_context
 from tqdm import tqdm
 from glob import glob
 

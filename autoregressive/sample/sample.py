@@ -5,23 +5,26 @@ torch.backends.cudnn.allow_tf32 = True
 torch.set_float32_matmul_precision("high")
 setattr(torch.nn.Linear, "reset_parameters", lambda self: None)
 setattr(torch.nn.LayerNorm, "reset_parameters", lambda self: None)
-from torchvision.utils import save_image
 
 
 import time
 import argparse
 import sys
+import os
 
-sys.path.append("/root/kongly/AR/LlamaGen")
+current_dir = os.path.dirname(os.path.abspath(__file__))
+llamagen_path = os.path.abspath(os.path.join(current_dir, "../../"))
+sys.path.append(llamagen_path)
 from autoregressive.models.gpt import GPT_models
 from autoregressive.models.generate import generate
 
-sys.path.append("/root/kongly/AR/LlamaGen/external_tokenizers/flextok")
-from external_tokenizers.flextok.flextok.flextok_wrapper import FlexTokFromHub
-from external_tokenizers.flextok.flextok.utils.misc import get_bf16_context
-from tqdm import tqdm
-from glob import glob
-
+flextok_path = os.path.abspath(
+    os.path.join(llamagen_path, "external_tokenizers/flextok")
+)
+sys.path.append(flextok_path)
+from flextok.flextok_wrapper import FlexTokFromHub
+from flextok.utils.demo import imgs_from_urls, denormalize, batch_to_pil
+from flextok.utils.misc import detect_bf16_support, get_bf16_context, get_generator
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--gpt-model", type=str, default="GPT-Mini")
@@ -148,12 +151,6 @@ print("loading decoder")
 vq_model = FlexTokFromHub.from_pretrained(args.vq_ckpt)
 vq_model.to(device)
 vq_model.eval()
-
-
-from flextok.flextok_wrapper import FlexTokFromHub
-from flextok.utils.demo import imgs_from_urls, denormalize, batch_to_pil
-from flextok.utils.misc import detect_bf16_support, get_bf16_context, get_generator
-
 
 def gen(gpt_model, name):
     class_labels = [207, 360, 387, 974, 88, 979, 417, 279]

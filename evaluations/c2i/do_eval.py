@@ -17,7 +17,9 @@ import sys
 import json
 import os
 
-sys.path.append("/root/kongly/AR/LlamaGen")
+current_dir = os.path.dirname(os.path.abspath(__file__))
+llamagen_path = os.path.abspath(os.path.join(current_dir, "../../"))
+sys.path.append(llamagen_path)
 from autoregressive.models.gpt import GPT_models
 
 from autoregressive.sample.sample_c2i_lib import do_sample
