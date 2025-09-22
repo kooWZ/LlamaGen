@@ -94,6 +94,9 @@ def save_checkpoint(
         checkpoint["ema"] = ema.state_dict()
     checkpoint_path = f"{checkpoint_dir}/{epoch}_{train_steps:07d}.pt"
     torch.save(checkpoint, checkpoint_path)
+    latest_file = os.path.abspath(f"{checkpoint_dir}/../../latest.txt")
+    with open(latest_file, "w") as f:
+        f.write(checkpoint_path)
     logger.info(f"Saved checkpoint to {checkpoint_path}")
     logger.info(f"Uploading checkpoint to Hugging Face in background...")
     threading.Thread(
@@ -174,6 +177,19 @@ def main(args):
         logger.info(f"Experiment directory created at {experiment_dir}")
     else:
         logger = create_logger(None)
+
+    if args.auto_resume:
+        latest_file = f"{results_dir}/latest.txt"
+        if os.path.exists(latest_file):
+            with open(latest_file, "r") as f:
+                gpt_ckpt = f.read().strip()
+                if os.path.exists(gpt_ckpt):
+                    args.gpt_ckpt = gpt_ckpt
+                    logger.info(f"Auto-resume activated. Found latest checkpoint: {args.gpt_ckpt}")
+                else:
+                    logger.info(f"Auto-resume activated but latest checkpoint {gpt_ckpt} not found.")
+        else:
+            logger.info(f"Auto-resume activated but no latest.txt found at {latest_file}.")
 
     logger.info(f"{args}")
     logger.info(
