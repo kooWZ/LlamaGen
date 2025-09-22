@@ -69,7 +69,7 @@ def do_sample(gpt_model, args, rank, device, npz_path):
         c_indices = torch.randint(0, args.num_classes, (n,), device=device)
 
         index_sample = generate(
-            gpt_model,
+            gpt_model.module,
             c_indices,
             args.latent_size,
             cfg_scale=args.cfg_scale,
@@ -96,12 +96,14 @@ def do_sample(gpt_model, args, rank, device, npz_path):
         for i in range(n):
             # Convert tensor to numpy in the same format as the original PNG->numpy pipeline
             # Immediately move to CPU to save GPU memory
-            img_tensor = denormalize(reconst[i].cpu()).clamp(0, 1)
+            img_tensor = denormalize(reconst[i]).clamp(0, 1)
             # Convert from tensor (C, H, W) to numpy (H, W, C) and to uint8
-            img_numpy = (img_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-            batch_data.append(img_numpy)
+            img_converted = (img_tensor.permute(1, 2, 0) * 255).to(
+                torch.uint8
+            ).cpu()  # .numpy().astype(np.uint8)
+            batch_data.append(img_converted)
             # Store corresponding class index
-            batch_class_indices.append(c_indices[i].cpu().numpy())
+            batch_class_indices.append(c_indices[i].int().cpu())  # .numpy()
 
         # Store in CPU memory and record image shape
         if batch_data and img_shape is None:
@@ -117,34 +119,36 @@ def do_sample(gpt_model, args, rank, device, npz_path):
             start_gather_time = time.time()
 
             # Convert current batch to numpy arrays for gathering
-            if batch_samples:
-                rank_batch_images = np.stack(batch_samples)
-                rank_batch_labels = np.array(batch_labels)
-                batch_samples = []  # Clear after gathering
-                batch_labels = []  # Clear after gathering
-            else:
-                # Create empty arrays with correct shape
-                if img_shape is None:
-                    img_shape = (256, 256, 3)  # Default fallback
-                rank_batch_images = np.empty((0, *img_shape), dtype=np.uint8)
-                rank_batch_labels = np.empty((0,), dtype=np.int64)
+            rank_batch_images = torch.stack(batch_samples).to(device)
+            rank_batch_labels = torch.tensor(batch_labels).to(device)
+            batch_samples = []  # Clear after gathering
+            batch_labels = []  # Clear after gathering
 
             if rank == 0:
                 print(f"Gathering samples from iteration {iteration + 1}...")
 
             # Gather this batch from all ranks (both images and labels)
-            gathered_images = [None for _ in range(dist.get_world_size())]
-            gathered_labels = [None for _ in range(dist.get_world_size())]
-            torch.distributed.all_gather_object(gathered_images, rank_batch_images)
-            torch.distributed.all_gather_object(gathered_labels, rank_batch_labels)
+            gathered_images = [
+                torch.zeros_like(rank_batch_images, device=device)
+                for _ in range(dist.get_world_size())
+            ]
+            gathered_labels = [
+                torch.zeros_like(rank_batch_labels, device=device)
+                for _ in range(dist.get_world_size())
+            ]
 
+            dist.all_gather(
+                gathered_images, rank_batch_images
+            )
+            dist.all_gather(
+                gathered_labels, rank_batch_labels
+            )
             # rank0 processes and stores the gathered data
             if rank == 0:
                 for rank_images, rank_labels in zip(gathered_images, gathered_labels):
                     if rank_images.shape[0] > 0:
-                        final_samples_list.append(rank_images)
-                        final_labels_list.append(rank_labels)
-
+                        final_samples_list.append(rank_images.cpu())
+                        final_labels_list.append(rank_labels.cpu())
                 total_collected = sum(arr.shape[0] for arr in final_samples_list)
                 print(
                     f"Rank0: Gather took {time.time() - start_gather_time} seconds. Collected {total_collected} total samples and labels so far"
@@ -161,8 +165,8 @@ def do_sample(gpt_model, args, rank, device, npz_path):
     if rank == 0:
         if final_samples_list and final_labels_list:
             print("Concatenating all collected samples and labels...")
-            final_samples = np.concatenate(final_samples_list, axis=0)
-            final_labels = np.concatenate(final_labels_list, axis=0)
+            final_samples = np.concatenate([arr.numpy() for arr in final_samples_list], axis=0)
+            final_labels = np.concatenate([arr.numpy() for arr in final_labels_list], axis=0)
 
             # Truncate to exact number of samples needed (maintain correspondence)
             final_samples = final_samples[: args.eval_num_fid_samples]

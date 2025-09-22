@@ -28,10 +28,6 @@ except ImportError:
 
 import sys
 
-os.environ["NCCL_DEBUG"] = "INFO"
-os.environ["NCCL_DEBUG_SUBSYS"] = "INIT,BOOTSTRAP,ENV,NET,GRAPH"
-os.environ["NCCL_DEBUG_FILE"] = "nccl.%h.%p.log"
-
 current_dir = os.path.dirname(os.path.abspath(__file__))
 llamagen_path = os.path.abspath(os.path.join(current_dir, "../../"))
 sys.path.append(llamagen_path)
@@ -158,25 +154,25 @@ def main(args):
         return new_path
 
     # Setup an experiment folder:
+    results_dir = check_results_dir(args.results_dir)
     if rank == 0:
-        results_dir = check_results_dir(args.results_dir)
         os.makedirs(
             results_dir, exist_ok=True
         )  # Make results folder (holds all experiment subfolders)
-        experiment_index = len(glob(f"{results_dir}/*"))
-        model_string_name = args.gpt_model.replace(
-            "/", "-"
-        )  # e.g., GPT-XL/2 --> GPT-XL-2 (for naming folders)
-        experiment_dir = f"{results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
-        checkpoint_dir = (
-            f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
-        )
-        os.makedirs(checkpoint_dir, exist_ok=True)
+    experiment_index = len(glob(f"{results_dir}/*"))
+    model_string_name = args.gpt_model.replace(
+        "/", "-"
+    )  # e.g., GPT-XL/2 --> GPT-XL-2 (for naming folders)
+    experiment_dir = f"{results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
+    checkpoint_dir = (
+        f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
+    )
+    dist.barrier()
+    if rank == 0:
+        os.makedirs(checkpoint_dir, exist_ok=False)
         logger = create_logger(experiment_dir)
         logger.info(f"Experiment directory created at {experiment_dir}")
-    dist.barrier()
-    if rank != 0:
-        results_dir = check_results_dir(args.results_dir)
+    else:
         logger = create_logger(None)
 
     logger.info(f"{args}")
@@ -366,7 +362,9 @@ def main(args):
             f"Using eval_every_epoch: {args.eval_every_epoch}, calculated eval_every: {eval_every}"
         )
     else:
-        eval_every = 9999999999
+        eval_every = (
+            args.eval_every_iter if hasattr(args, "eval_every_iter") else 9999999999
+        )
 
     logger.info(f"Training for {args.epochs} epochs...")
     total_steps_remaining = args.epochs * len(loader) - train_steps
@@ -489,12 +487,14 @@ def main(args):
                 and train_steps % eval_every == 0
                 and train_steps > 0
             ):
+                eval_start_time = time.time()
                 model.eval()
                 try:
                     eval_metrics = do_eval(
                         model, args, rank, device, epoch, checkpoint_dir
                     )
                     eval_metrics = {f"eval/{k}": v for k, v in eval_metrics.items()}
+                    eval_metrics["timing/eval_time_sec"] = time.time() - eval_start_time
                 except Exception as e:
                     logger.warning(f"Evaluation failed: {e}")
                     eval_metrics = {}
