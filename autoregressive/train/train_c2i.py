@@ -28,6 +28,10 @@ except ImportError:
 
 import sys
 
+os.environ["NCCL_DEBUG"] = "INFO"
+os.environ["NCCL_DEBUG_SUBSYS"] = "INIT,BOOTSTRAP,ENV,NET,GRAPH"
+os.environ["NCCL_DEBUG_FILE"] = "nccl.%h.%p.log"
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 llamagen_path = os.path.abspath(os.path.join(current_dir, "../../"))
 sys.path.append(llamagen_path)
@@ -331,6 +335,9 @@ def main(args):
     if args.ema:
         ema.eval()  # EMA model should always be in eval mode
 
+    if rank == 0:
+        os.system("nvidia-smi topo -m")
+
     ptdtype = {"none": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}[
         args.mixed_precision
     ]
@@ -370,14 +377,15 @@ def main(args):
     for epoch in range(start_epoch, args.epochs):
         sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
+        data_start_time = time.time()
         for x, y, _ in loader:
-            step_start_time = data_start_time = time.time()
+            step_start_time = time.time()
+            data_time = step_start_time - data_start_time
             x = x.to(device, non_blocking=True).int()
             y = y.to(device, non_blocking=True).long()
             z_indices = x.reshape(x.shape[0], -1)
             c_indices = y.reshape(-1)
             assert z_indices.shape[0] == c_indices.shape[0]
-            data_time = time.time() - data_start_time
 
             with torch.cuda.amp.autocast(dtype=ptdtype):
                 _, loss = model(
@@ -548,7 +556,7 @@ def main(args):
                 wandb_logs.update(eval_metrics)
 
                 wandb.log(wandb_logs, step=train_steps)
-
+            data_start_time = time.time()
     if rank == 0:
         save_checkpoint(
             logger,
