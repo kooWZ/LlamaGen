@@ -196,7 +196,9 @@ class KVCache(nn.Module):
 
     def update(self, input_pos, k_val, v_val):
         # input_pos: [S], k_val: [B, H, S, D]
-        assert input_pos.shape[0] == k_val.shape[2]
+        assert (
+            input_pos.shape[0] == k_val.shape[2]
+        ), f"{input_pos=}, {k_val.shape=}, {v_val.shape=}"
         k_out = self.k_cache
         v_out = self.v_cache
         k_out[:, :, input_pos] = k_val
@@ -380,6 +382,15 @@ class Transformer(nn.Module):
             self.config.rope_base,
             self.cls_token_num,
         )
+
+    def clean_caches(self):
+        for b in self.layers:
+            b.attention.kv_cache = None
+
+    def train(self, mode: bool = True):
+        for b in self.layers:
+            b.attention.kv_cache = None
+        return super().train(mode)
 
     def forward(
         self, 

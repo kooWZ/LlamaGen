@@ -126,7 +126,10 @@ def _upload_to_hf(checkpoint_path, logger):
 def do_eval(model, args, rank, device, epoch, checkpoint_dir):
     npz_path = f"{checkpoint_dir}/eval_samples_epoch{epoch}.npz"
     do_sample(model, args, rank, device, npz_path)
-    return evaluate(npz_path)
+    if rank == 0:
+        return evaluate(npz_path)
+    else:
+        return {}
 
 
 #################################################################################
@@ -514,6 +517,7 @@ def main(args):
                 except Exception as e:
                     logger.warning(f"Evaluation failed: {e}")
                     eval_metrics = {}
+                dist.barrier()
                 model.train()
 
             # Reduce loss history over all processes:
