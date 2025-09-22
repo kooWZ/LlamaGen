@@ -9,7 +9,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-
+import subprocess
 from glob import glob
 from copy import deepcopy
 import os
@@ -336,7 +336,14 @@ def main(args):
         ema.eval()  # EMA model should always be in eval mode
 
     if rank == 0:
-        os.system("nvidia-smi topo -m")
+        result = subprocess.run(
+            ["nvidia-smi", "topo", "-m"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        logger.info(result.stdout)
+        logger.info(result.stderr)
 
     ptdtype = {"none": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}[
         args.mixed_precision

@@ -22,7 +22,7 @@ no_compile: false
 epochs: 300
 global_batch_size: 1024
 global_seed: 42
-num_workers: 2
+num_workers: 16
 gradient_accumulation_steps: 1
 mixed_precision: "bf16"
 fp32_attention: true
