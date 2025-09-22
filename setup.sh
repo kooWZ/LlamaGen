@@ -1,6 +1,8 @@
 pip install tensorflow==2.20.0
 pip install nvidia-cudnn-cu12==9.3.0.75
 pip install scipy
+pip install mup
+pip install hydra-core
 
 cd external_tokenizers
 git clone https://github.com/apple/ml-flextok.git flextok

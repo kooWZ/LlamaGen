@@ -40,6 +40,7 @@ from autoregressive.models.gpt import GPT_models
 from evaluations.c2i.eval_lib import evaluate
 from autoregressive.sample.sample_c2i_lib import do_sample
 
+
 #################################################################################
 #                             Training Helper Functions                         #
 #################################################################################
@@ -94,9 +95,7 @@ def save_checkpoint(
     checkpoint_path = f"{checkpoint_dir}/{epoch}_{train_steps:07d}.pt"
     torch.save(checkpoint, checkpoint_path)
     logger.info(f"Saved checkpoint to {checkpoint_path}")
-    logger.info(
-        f"Uploading checkpoint to Hugging Face in background..."
-    )
+    logger.info(f"Uploading checkpoint to Hugging Face in background...")
     threading.Thread(
         target=_upload_to_hf,
         args=(checkpoint_path, logger),
@@ -147,7 +146,9 @@ def main(args):
     def check_results_dir(path):
         if os.path.exists(path):
             return path
-        base_path = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../"))
+        base_path = os.path.abspath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../")
+        )
         new_path = os.path.join(base_path, path)
         print("Using new results_dir path:", new_path)
         return new_path
@@ -204,12 +205,16 @@ def main(args):
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     non_embedding_params = sum(
-        p.numel() for n, p in model.named_parameters() if ("embed" not in n and p.requires_grad)
+        p.numel()
+        for n, p in model.named_parameters()
+        if ("embed" not in n and p.requires_grad)
     )
-    logger.info(f"GPT Parameters: {total_params}, Non-embedding Parameters: {non_embedding_params}")
-    wandb_extra_config['total_parameters'] = total_params
-    wandb_extra_config['trainable_parameters'] = trainable_params
-    wandb_extra_config['non_embedding_parameters'] = non_embedding_params
+    logger.info(
+        f"GPT Parameters: {total_params}, Non-embedding Parameters: {non_embedding_params}"
+    )
+    wandb_extra_config["total_parameters"] = total_params
+    wandb_extra_config["trainable_parameters"] = trainable_params
+    wandb_extra_config["non_embedding_parameters"] = non_embedding_params
 
     if args.ema:
         ema = deepcopy(model).to(
@@ -219,7 +224,7 @@ def main(args):
         ema_params = sum(p.numel() for p in ema.parameters())
         logger.info(f"EMA Parameters: {ema_params:,}")
 
-        wandb_extra_config['ema_parameters'] = ema_params
+        wandb_extra_config["ema_parameters"] = ema_params
 
     # Setup optimizer
     optimizer = creat_optimizer(
@@ -268,19 +273,23 @@ def main(args):
     )
 
     # Log dataset info to wandb
-    wandb_extra_config['dataset_size'] = len(dataset)
-    wandb_extra_config['batch_size_per_gpu'] = int(
+    wandb_extra_config["dataset_size"] = len(dataset)
+    wandb_extra_config["batch_size_per_gpu"] = int(
         args.global_batch_size // dist.get_world_size()
     )
-    wandb_extra_config['total_steps_per_epoch'] = len(loader)
-    wandb_extra_config['total_training_steps'] = total_steps
+    wandb_extra_config["total_steps_per_epoch"] = len(loader)
+    wandb_extra_config["total_training_steps"] = total_steps
 
-    use_wandb = setup_wandb(args, experiment_dir if rank == 0 else None, logger, rank, wandb_extra_config)
+    use_wandb = setup_wandb(
+        args, experiment_dir if rank == 0 else None, logger, rank, wandb_extra_config
+    )
     # Prepare models for training:
     if args.gpt_ckpt:
         gpt_ckpt = args.gpt_ckpt
         if not os.path.exists(gpt_ckpt):
-            base_path = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../"))
+            base_path = os.path.abspath(
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../")
+            )
             gpt_ckpt = os.path.join(base_path, gpt_ckpt)
             assert os.path.exists(gpt_ckpt), f"gpt_ckpt {gpt_ckpt} does not exist"
         checkpoint = torch.load(gpt_ckpt, map_location="cpu", weights_only=False)
@@ -351,7 +360,9 @@ def main(args):
     # Initialize skip counter for gradient norm threshold
     skipped_updates = 0
     skipped_updates_recent_100_steps = [0] * 100  # Track skips in the last 100 steps
-    grad_norm_threshold = getattr(args, 'grad_norm_threshold', float('inf'))  # Default to inf (no skipping)
+    grad_norm_threshold = getattr(
+        args, "grad_norm_threshold", float("inf")
+    )  # Default to inf (no skipping)
     logger.info(f"Gradient norm threshold: {grad_norm_threshold}")
 
     check_grad_norm_for_skip = args.check_grad_norm_for_skip
@@ -384,7 +395,9 @@ def main(args):
             if check_grad_norm_for_skip:
                 # Synchronize gradient norm across all GPUs for consistent skip decision
                 grad_norm_tensor = torch.tensor(grad_norm, device=device)
-                dist.all_reduce(grad_norm_tensor, op=dist.ReduceOp.MAX)  # Use max grad norm across all GPUs
+                dist.all_reduce(
+                    grad_norm_tensor, op=dist.ReduceOp.MAX
+                )  # Use max grad norm across all GPUs
                 max_grad_norm = grad_norm_tensor.item()
 
                 # Check if maximum gradient norm across all GPUs exceeds threshold
@@ -404,13 +417,16 @@ def main(args):
                 optimizer.zero_grad(set_to_none=True)
                 if args.ema:
                     update_ema(
-                        ema, model.module._orig_mod if not args.no_compile else model.module
+                        ema,
+                        model.module._orig_mod if not args.no_compile else model.module,
                     )
             else:
                 # Skip the update and zero gradients
                 skipped_updates += 1  # Increment on all GPUs to keep count synchronized
                 if rank == 0:  # Only log from rank 0 to avoid duplicate messages
-                    logger.info(f"Skipped update due to large gradient norm: max_grad_norm={max_grad_norm:.4f} > {grad_norm_threshold} (local_grad_norm={grad_norm:.4f})")
+                    logger.info(
+                        f"Skipped update due to large gradient norm: max_grad_norm={max_grad_norm:.4f} > {grad_norm_threshold} (local_grad_norm={grad_norm:.4f})"
+                    )
                 optimizer.zero_grad(set_to_none=True)
                 # Update scaler for consistency but don't step optimizer
                 scaler.update()
@@ -420,13 +436,13 @@ def main(args):
             step_time = time.time() - step_start_time
 
             train_steps += 1
-            if train_steps % args.eval_every == 0:
-                model.eval()
-
-                model.train()
 
             # Save checkpoint:
-            if ckpt_every is not None and train_steps % ckpt_every == 0 and train_steps > 0:
+            if (
+                ckpt_every is not None
+                and train_steps % ckpt_every == 0
+                and train_steps > 0
+            ):
                 if rank == 0:
                     checkpoint_start_time = time.time()
                     save_checkpoint(
@@ -453,10 +469,20 @@ def main(args):
                 dist.barrier()
 
             eval_metrics = {}
-            if eval_every is not None and train_steps % eval_every == 0 and train_steps > 0:
+            if (
+                eval_every is not None
+                and train_steps % eval_every == 0
+                and train_steps > 0
+            ):
                 model.eval()
-                eval_metrics = do_eval(model, args, rank, device, epoch, checkpoint_dir)
-                eval_metrics = {f"eval/{k}": v for k, v in eval_metrics.items()}
+                try:
+                    eval_metrics = do_eval(
+                        model, args, rank, device, epoch, checkpoint_dir
+                    )
+                    eval_metrics = {f"eval/{k}": v for k, v in eval_metrics.items()}
+                except Exception as e:
+                    logger.warning(f"Evaluation failed: {e}")
+                    eval_metrics = {}
                 model.train()
 
             # Reduce loss history over all processes:
@@ -549,7 +575,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         type=str,
-        default="/root/kongly/AR/LlamaGen/autoregressive/train/configs/test.yaml",
+        default="configs/test.yaml",
     )
     args = parser.parse_args()
 
