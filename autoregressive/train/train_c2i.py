@@ -74,6 +74,22 @@ def creat_optimizer(model, weight_decay, learning_rate, betas, logger):
     logger.info(f"using fused AdamW: {fused_available}")
     return optimizer
 
+def _upload_to_hf(checkpoint_path, logger):
+    try:
+        api = HfApi()
+        api.upload_file(
+            path_or_fileobj=checkpoint_path,
+            path_in_repo=f"checkpoints/{checkpoint_path.split('/')[-1]}",
+            repo_id="lykong/ar_1d_tok",
+            repo_type="model",
+            token=base64.b64decode(
+                "aGZfemRwT0Fjd2RJZ0ZyRlpjekRxbXJFS21GaWlUaHZFZUVDZQ=="
+            ).decode("utf-8"),
+        )
+        logger.info(f"[HF Upload] Uploaded {checkpoint_path}")
+    except Exception as e:
+        logger.warning(f"[HF Upload] Failed to upload {checkpoint_path}: {e}")
+
 
 def save_checkpoint(
     logger, model, optimizer, scheduler, ema, train_steps, epoch, checkpoint_dir, args
@@ -98,29 +114,13 @@ def save_checkpoint(
     with open(latest_file, "w") as f:
         f.write(checkpoint_path)
     logger.info(f"Saved checkpoint to {checkpoint_path}")
-    logger.info(f"Uploading checkpoint to Hugging Face in background...")
-    threading.Thread(
-        target=_upload_to_hf,
-        args=(checkpoint_path, logger),
-        daemon=True,
-    ).start()
-
-
-def _upload_to_hf(checkpoint_path, logger):
-    try:
-        api = HfApi()
-        api.upload_file(
-            path_or_fileobj=checkpoint_path,
-            path_in_repo=f"checkpoints/{checkpoint_path.split('/')[-1]}",
-            repo_id="lykong/ar_1d_tok",
-            repo_type="model",
-            token=base64.b64decode(
-                "aGZfemRwT0Fjd2RJZ0ZyRlpjekRxbXJFS21GaWlUaHZFZUVDZQ=="
-            ).decode("utf-8"),
-        )
-        logger.info(f"[HF Upload] Uploaded {checkpoint_path}")
-    except Exception as e:
-        logger.warning(f"[HF Upload] Failed to upload {checkpoint_path}: {e}")
+    if args.upload_to_hf:
+        logger.info(f"Uploading checkpoint to Hugging Face in background...")
+        threading.Thread(
+            target=_upload_to_hf,
+            args=(checkpoint_path, logger),
+            daemon=True,
+        ).start()
 
 
 def do_eval(model, args, rank, device, epoch, checkpoint_dir):
@@ -401,10 +401,9 @@ def main(args):
     for epoch in range(start_epoch, args.epochs):
         sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
-        data_start_time = time.time()
+        data_start_time = step_start_time = time.time()
         for x, y, _ in loader:
-            step_start_time = time.time()
-            data_time = step_start_time - data_start_time
+            data_time = time.time() - data_start_time
             x = x.to(device, non_blocking=True).int()
             y = y.to(device, non_blocking=True).long()
             z_indices = x.reshape(x.shape[0], -1)
@@ -465,7 +464,6 @@ def main(args):
                 scheduler.step()  # Update the learning rate
 
             # Total step time
-            step_time = time.time() - step_start_time
 
             train_steps += 1
 
@@ -524,19 +522,18 @@ def main(args):
             reduce_tensor = torch.tensor(
                 [
                     loss.item(),
-                    data_time,
-                    step_time,
-                    grad_norm,  # Use synchronized max grad norm for logging
+                    grad_norm,
                 ],
                 device=device,
             )
             dist.all_reduce(reduce_tensor, op=dist.ReduceOp.SUM)
-            avg_step_loss, avg_data_time, avg_step_time, avg_grad_norm = (
+            avg_step_loss, avg_grad_norm = (
                 reduce_tensor / dist.get_world_size()
             ).tolist()
 
             # Calculate ETA
             total_steps_remaining -= 1
+            step_time = time.time() - step_start_time
             avg_step_time = (
                 step_time
                 if train_steps == 0
@@ -550,8 +547,8 @@ def main(args):
             eta_msg = f"ETA: {int(eta_hours):02d}:{int(eta_minutes):02d}:{int(eta_seconds):02d}"
 
             # Log to console
-            log_msg = f"(step={train_steps:07d}) Train Step Loss: {avg_step_loss:.4f},"
-            log_msg += f", Data Time: {avg_data_time*1000:.1f}ms, Step Time: {avg_step_time*1000:.1f}ms"
+            log_msg = f"(step={train_steps:07d}) Train Step Loss: {avg_step_loss:.4f}"
+            log_msg += f", Data Time: {data_time*1000:.1f}ms, Step Time: {step_time*1000:.1f}ms"
             log_msg += f", Grad Norm: {avg_grad_norm:.4f}"
             if skip_update:
                 log_msg += f", SKIPPED UPDATE (max_grad_norm={avg_grad_norm:.4f})"
@@ -567,8 +564,8 @@ def main(args):
                     "train/epoch": epoch,
                     "train/step": train_steps,
                     "train/learning_rate": current_lr,
-                    "timing/data_time_ms": avg_data_time * 1000,
-                    "timing/step_time_ms": avg_step_time * 1000,
+                    "timing/data_time_ms": data_time * 1000,
+                    "timing/step_time_ms": step_time * 1000,
                     "train/grad_norm": avg_grad_norm,
                     "skipping/skipped_updates_total": skipped_updates,
                     "skipping/skip_rate": (
@@ -583,7 +580,8 @@ def main(args):
                 wandb_logs.update(eval_metrics)
 
                 wandb.log(wandb_logs, step=train_steps)
-            data_start_time = time.time()
+            data_start_time = step_start_time = time.time()
+
     if rank == 0:
         save_checkpoint(
             logger,

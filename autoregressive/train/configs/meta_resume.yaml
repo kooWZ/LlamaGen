@@ -5,6 +5,7 @@ code_path: "ImageNet-1k/flextok_codes/"
 auto_resume: true
 gpt_ckpt: "outputs/ckpts/92_1163523.pt"
 results_dir: "outputs/meta_resume"
+upload_to_hf: false
 
 ema: false
 
