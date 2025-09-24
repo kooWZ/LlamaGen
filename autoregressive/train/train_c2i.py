@@ -501,28 +501,29 @@ def main(args):
                 #     and train_steps > 0
                 # ):
 
-                latest_file = f"{results_dir}/latest.txt"
-                if os.path.exists(latest_file):
-                    with open(latest_file, "r") as f:
-                        ckpt_path = f.read().strip()
-                        logger.info(f"Evaluating checkpoint: {ckpt_path}")
-                    eval_start_time = time.time()
-                    # model.eval()
-                    try:
-                        eval_metrics = do_eval(
-                            ckpt_path, args, rank, device, epoch, train_steps, checkpoint_dir, logger
-                        )
-                        if rank == 0:
-                            eval_metrics = {f"eval/{k}": v for k, v in eval_metrics.items()}
-                            eval_metrics["timing/eval_time_sec"] = time.time() - eval_start_time
-                            extra_metrics.update(eval_metrics)
-                    except Exception as e:
-                        raise e
-                        logger.warning(f"Evaluation failed: {e}")
-                    dist.barrier()
-                    # model.train()
-                else:
-                    logger.warning(f"No checkpoint found at {latest_file}, skipping evaluation.")
+                if args.do_eval:
+                    latest_file = f"{results_dir}/latest.txt"
+                    if os.path.exists(latest_file):
+                        with open(latest_file, "r") as f:
+                            ckpt_path = f.read().strip()
+                            logger.info(f"Evaluating checkpoint: {ckpt_path}")
+                        eval_start_time = time.time()
+                        # model.eval()
+                        try:
+                            eval_metrics = do_eval(
+                                ckpt_path, args, rank, device, epoch, train_steps, checkpoint_dir, logger
+                            )
+                            if rank == 0:
+                                eval_metrics = {f"eval/{k}": v for k, v in eval_metrics.items()}
+                                eval_metrics["timing/eval_time_sec"] = time.time() - eval_start_time
+                                extra_metrics.update(eval_metrics)
+                        except Exception as e:
+                            raise e
+                            logger.warning(f"Evaluation failed: {e}")
+                        dist.barrier()
+                        # model.train()
+                    else:
+                        logger.warning(f"No checkpoint found at {latest_file}, skipping evaluation.")
 
             if train_steps % args.reduce_grad_norm_every_iter == 0:
                 reduce_tensor = torch.tensor(
