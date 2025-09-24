@@ -132,6 +132,15 @@ def do_eval(model, args, rank, device, epoch, checkpoint_dir):
         return {}
 
 
+def calculate_eta(step_time, total_steps_remaining):
+    if step_time == 0:
+        return 0, 0, 0
+    eta_seconds = step_time * total_steps_remaining
+    eta_minutes, eta_seconds = divmod(eta_seconds, 60)
+    eta_hours, eta_minutes = divmod(eta_minutes, 60)
+    return int(eta_hours), int(eta_minutes), int(eta_seconds)
+
+
 #################################################################################
 #                                  Training Loop                                #
 #################################################################################
@@ -273,7 +282,7 @@ def main(args):
     total_steps = args.epochs * len(loader)
 
     # Calculate warmup steps from warmup epochs if available
-    if hasattr(args, "warmup_epochs") and args.warmup_epochs is not None:
+    if args.warmup_epochs is not None:
         warmup_steps = args.warmup_epochs * len(loader)
         logger.info(
             f"Using warmup_epochs: {args.warmup_epochs}, calculated warmup_steps: {warmup_steps}"
@@ -350,40 +359,28 @@ def main(args):
     if args.ema:
         ema.eval()  # EMA model should always be in eval mode
 
-    if rank == 0:
-        result = subprocess.run(
-            ["nvidia-smi", "topo", "-m"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        logger.info(result.stdout)
-        logger.info(result.stderr)
-
     ptdtype = {"none": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}[
         args.mixed_precision
     ]
     # initialize a GradScaler. If enabled=False scaler is a no-op
-    scaler = torch.cuda.amp.GradScaler(enabled=(args.mixed_precision == "fp16"))
+    scaler = torch.amp.GradScaler("cuda", enabled=(args.mixed_precision == "fp16"))
 
-    if hasattr(args, "ckpt_every_epoch") and args.ckpt_every_epoch is not None:
+    if args.ckpt_every_epoch is not None:
         ckpt_every = args.ckpt_every_epoch * len(loader)
         logger.info(
             f"Using ckpt_every_epoch: {args.ckpt_every_epoch}, calculated ckpt_every: {ckpt_every}"
         )
     else:
-        ckpt_every = args.ckpt_every_iter if hasattr(args, "ckpt_every_iter") else None
+        ckpt_every = args.ckpt_every_iter
         logger.info(f"Using ckpt_every directly: {ckpt_every}")
 
-    if hasattr(args, "eval_every_epoch") and args.eval_every_epoch is not None:
+    if args.eval_every_epoch is not None:
         eval_every = args.eval_every_epoch * len(loader)
         logger.info(
             f"Using eval_every_epoch: {args.eval_every_epoch}, calculated eval_every: {eval_every}"
         )
     else:
-        eval_every = (
-            args.eval_every_iter if hasattr(args, "eval_every_iter") else 9999999999
-        )
+        eval_every = args.eval_every_iter
 
     logger.info(f"Training for {args.epochs} epochs...")
     total_steps_remaining = args.epochs * len(loader) - train_steps
@@ -397,7 +394,7 @@ def main(args):
     logger.info(f"Gradient norm threshold: {grad_norm_threshold}")
 
     check_grad_norm_for_skip = args.check_grad_norm_for_skip
-
+    last_step_time = 0
     for epoch in range(start_epoch, args.epochs):
         sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
@@ -410,7 +407,7 @@ def main(args):
             c_indices = y.reshape(-1)
             assert z_indices.shape[0] == c_indices.shape[0]
 
-            with torch.cuda.amp.autocast(dtype=ptdtype):
+            with torch.amp.autocast("cuda", dtype=ptdtype):
                 _, loss = model(
                     cond_idx=c_indices, idx=z_indices[:, :-1], targets=z_indices
                 )
@@ -464,8 +461,9 @@ def main(args):
                 scheduler.step()  # Update the learning rate
 
             # Total step time
-
             train_steps += 1
+            total_steps_remaining -= 1
+            extra_metrics = {}
 
             # Save checkpoint:
             if (
@@ -487,18 +485,9 @@ def main(args):
                         args,
                     )
                     ckpt_time = time.time() - checkpoint_start_time
-                    # Log checkpoint save to wandb
-                    if use_wandb:
-                        wandb.log(
-                            {
-                                "timing/save_checkpoint": ckpt_time,
-                            },
-                            step=train_steps,
-                        )
-
+                    extra_metrics["timing/save_checkpoint"] = ckpt_time
                 dist.barrier()
 
-            eval_metrics = {}
             if (
                 eval_every is not None
                 and train_steps % eval_every == 0
@@ -512,76 +501,78 @@ def main(args):
                     )
                     eval_metrics = {f"eval/{k}": v for k, v in eval_metrics.items()}
                     eval_metrics["timing/eval_time_sec"] = time.time() - eval_start_time
+                    extra_metrics.update(eval_metrics)
                 except Exception as e:
                     logger.warning(f"Evaluation failed: {e}")
-                    eval_metrics = {}
                 dist.barrier()
                 model.train()
 
-            # Reduce loss history over all processes:
-            reduce_tensor = torch.tensor(
-                [
-                    loss.item(),
-                    grad_norm,
-                ],
-                device=device,
-            )
-            dist.all_reduce(reduce_tensor, op=dist.ReduceOp.SUM)
-            avg_step_loss, avg_grad_norm = (
-                reduce_tensor / dist.get_world_size()
-            ).tolist()
+            if train_steps % args.reduce_grad_norm_every_iter == 0:
+                reduce_tensor = torch.tensor(
+                    [loss.detach(), grad_norm],
+                    device=device
+                )
+                reduce_req = dist.reduce(
+                    reduce_tensor,
+                    dst=0,
+                    op=dist.ReduceOp.SUM,
+                    async_op=True
+                )
+                reduce_req.wait()
 
-            # Calculate ETA
-            total_steps_remaining -= 1
-            step_time = time.time() - step_start_time
-            avg_step_time = (
-                step_time
-                if train_steps == 0
-                else (avg_step_time * train_steps + step_time) / (train_steps + 1)
-            )
-            eta_seconds = avg_step_time * total_steps_remaining
-            eta_minutes, eta_seconds = divmod(eta_seconds, 60)
-            eta_hours, eta_minutes = divmod(eta_minutes, 60)
-
-            # Log ETA
-            eta_msg = f"ETA: {int(eta_hours):02d}:{int(eta_minutes):02d}:{int(eta_seconds):02d}"
+                if rank == 0:
+                    avg_step_loss, avg_grad_norm = (
+                        reduce_tensor / dist.get_world_size()
+                    ).tolist()
+            else:
+                if rank == 0:
+                    avg_step_loss, avg_grad_norm = loss.item(), grad_norm
 
             # Log to console
-            log_msg = f"(step={train_steps:07d}) Train Step Loss: {avg_step_loss:.4f}"
-            log_msg += f", Data Time: {data_time*1000:.1f}ms, Step Time: {step_time*1000:.1f}ms"
-            log_msg += f", Grad Norm: {avg_grad_norm:.4f}"
-            if skip_update:
-                log_msg += f", SKIPPED UPDATE (max_grad_norm={avg_grad_norm:.4f})"
-            log_msg += f", {eta_msg}"
-            logger.info(log_msg)
-
-            # Log to wandb
-            if use_wandb and rank == 0:
-                # Get current learning rate
-                current_lr = optimizer.param_groups[0]["lr"]
-                wandb_logs = {
-                    "train/loss": avg_step_loss,
-                    "train/epoch": epoch,
-                    "train/step": train_steps,
-                    "train/learning_rate": current_lr,
-                    "timing/data_time_ms": data_time * 1000,
-                    "timing/step_time_ms": step_time * 1000,
-                    "train/grad_norm": avg_grad_norm,
-                    "skipping/skipped_updates_total": skipped_updates,
-                    "skipping/skip_rate": (
-                        skipped_updates / train_steps if train_steps > 0 else 0
-                    ),
-                    "skipping/skip_rate_recent_100_steps": recent_skip_rate,
-                }
+            if rank == 0:
+                eta_hours, eta_minutes, eta_seconds = calculate_eta(
+                    last_step_time,
+                    total_steps_remaining,
+                )
+                eta_msg = f"ETA: {eta_hours:02d}:{eta_minutes:02d}:{eta_seconds:02d}"
+                log_msg = f"(step={train_steps:07d}) Train Step Loss: {avg_step_loss:.4f}"
+                log_msg += f", Data Time: {data_time*1000:.1f}ms, Last Step Time: {last_step_time*1000:.1f}ms"
+                log_msg += f", Grad Norm: {avg_grad_norm:.4f}"
                 if skip_update:
-                    wandb_logs["train/update_skipped"] = 1
-                else:
-                    wandb_logs["train/update_skipped"] = 0
-                wandb_logs.update(eval_metrics)
+                    log_msg += f", SKIPPED UPDATE (max_grad_norm={avg_grad_norm:.4f})"
+                log_msg += f", {eta_msg}"
+                logger.info(log_msg)
 
-                wandb.log(wandb_logs, step=train_steps)
-            data_start_time = step_start_time = time.time()
+                # Log to wandb
+                if use_wandb:
+                    # Get current learning rate
+                    current_lr = optimizer.param_groups[0]["lr"]
+                    wandb_logs = {
+                        "train/loss": avg_step_loss,
+                        "train/epoch": epoch,
+                        "train/step": train_steps,
+                        "train/learning_rate": current_lr,
+                        "timing/data_time_ms": data_time * 1000,
+                        "timing/step_time_ms": last_step_time * 1000,
+                        "train/grad_norm": avg_grad_norm,
+                        "skipping/skipped_updates_total": skipped_updates,
+                        "skipping/skip_rate": (
+                            skipped_updates / train_steps if train_steps > 0 else 0
+                        ),
+                        "skipping/skip_rate_recent_100_steps": recent_skip_rate,
+                    }
+                    if skip_update:
+                        wandb_logs["train/update_skipped"] = 1
+                    else:
+                        wandb_logs["train/update_skipped"] = 0
+                    wandb_logs.update(extra_metrics)
+                    wandb.log(wandb_logs, step=train_steps)
 
+            curr_time = time.time()
+            last_step_time = curr_time - step_start_time
+            data_start_time = step_start_time = curr_time
+
+    dist.barrier()
     if rank == 0:
         save_checkpoint(
             logger,
@@ -590,16 +581,13 @@ def main(args):
             scheduler,
             ema if args.ema else None,
             train_steps,
-            epoch,
+            "final",
             checkpoint_dir,
             args,
         )
-
-    logger.info("Done!")
-
     if use_wandb and rank == 0:
         wandb.finish()
-
+    dist.barrier()
     dist.destroy_process_group()
 
 
@@ -619,5 +607,8 @@ if __name__ == "__main__":
         def __init__(self, config):
             for key, value in config.items():
                 setattr(self, key, value)
+        def __getattr__(self, name):
+            print(f"Warning: {name} not found in Args, returning None")
+            return None
 
     main(Args(config))

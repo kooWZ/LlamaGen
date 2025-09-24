@@ -259,7 +259,7 @@ class Attention(nn.Module):
 
         if self.config.fp32_attention:
             # Force fp32 for attention computation to improve numerical stability
-            with torch.cuda.amp.autocast(enabled=False):
+            with torch.amp.autocast("cuda", enabled=False):
                 output = F.scaled_dot_product_attention(
                     xq.float(), keys.float(), values.float(), 
                     attn_mask=mask, 
