@@ -8,7 +8,7 @@ import h5py
 from tqdm import tqdm
 from collections import defaultdict
 import random
-
+import torch.distributed as dist
 
 class H5Dataset(Dataset):
     def __init__(self, h5_path):
@@ -144,12 +144,14 @@ def merge_h5_datasets(path):
         path_bytes = [p.encode("utf-8") for p in all_paths]
         f.create_dataset("path", data=np.array(path_bytes, dtype="S"))
 
-def get_code_dataset(path):
-    if "merged.h5" not in os.listdir(path):
-        print("Merging h5 datasets...")
-        merge_h5_datasets(path)
-    else:
-        print("merged.h5 already exists, skipping merging.")
+def get_code_dataset(path, rank):
+    if rank == 0:
+        if "merged.h5" not in os.listdir(path):
+            print("Merging h5 datasets...")
+            merge_h5_datasets(path)
+        else:
+            print("merged.h5 already exists, skipping merging.")
+    dist.barrier()
 
     assert os.path.exists(os.path.join(path, "merged.h5")), \
         f"merged.h5 not found in {path} after merging."
@@ -162,4 +164,4 @@ def build_imagenet_code(args):
         base_path = os.path.dirname(os.path.abspath(__file__))
         code_path = os.path.join(base_path, code_path)
         assert os.path.exists(code_path), f"code_path {code_path} does not exist"
-    return get_code_dataset(code_path)
+    return get_code_dataset(code_path, args.rank)

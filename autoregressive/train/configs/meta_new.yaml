@@ -32,9 +32,9 @@ fp32_attention: true
 max_grad_norm: 1.0
 grad_norm_threshold: 10.0
 check_grad_norm_for_skip: false
-# ckpt_every_iter: 100000
+
 ckpt_every_epoch: 5
-eval_every_epoch: 5
+# eval_every_iter: 20
 reduce_grad_norm_every_iter: 1
 
 lr: 1.0e-3

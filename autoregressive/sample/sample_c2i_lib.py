@@ -11,6 +11,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 llamagen_path = os.path.abspath(os.path.join(current_dir, "../../"))
 sys.path.append(llamagen_path)
 from autoregressive.models.generate import generate
+from autoregressive.models.gpt import GPT_models
 
 flextok_path = os.path.abspath(os.path.join(llamagen_path, "external_tokenizers/flextok"))
 sys.path.append(flextok_path)
@@ -19,7 +20,45 @@ from flextok.utils.demo import denormalize
 from flextok.utils.misc import get_bf16_context, get_generator
 
 
-def do_sample(gpt_model, args, rank, device, npz_path):
+@torch.compiler.disable(recursive=True)
+def do_sample(ckpt_path, args, rank, device, npz_path):
+    if args.drop_path_rate > 0.0:
+        dropout_p = 0.0
+    else:
+        dropout_p = args.dropout_p
+    gpt_model = GPT_models[args.gpt_model](
+        vocab_size=args.vocab_size,
+        block_size=args.latent_size,
+        num_classes=args.num_classes,
+        cls_token_num=args.cls_token_num,
+        model_type=args.gpt_type,
+        resid_dropout_p=dropout_p,
+        ffn_dropout_p=dropout_p,
+        drop_path_rate=args.drop_path_rate,
+        token_dropout_p=args.token_dropout_p,
+        use_liger=args.use_liger,
+        fp32_attention=False,
+    ).to(device)
+    checkpoint = torch.load(ckpt_path, map_location="cpu")
+    if args.from_fsdp:  # fsdp
+        model_weight = checkpoint
+    elif "model" in checkpoint:  # ddp
+        model_weight = checkpoint["model"]
+    elif "module" in checkpoint:  # deepspeed
+        model_weight = checkpoint["module"]
+    elif "state_dict" in checkpoint:
+        model_weight = checkpoint["state_dict"]
+    else:
+        raise Exception(
+            "please check model weight, maybe add --from-fsdp to run command"
+        )
+    gpt_model.load_state_dict(model_weight, strict=False)
+    gpt_model.eval()
+    del checkpoint
+    # gpt_model = torch.compile(
+    #     gpt_model, mode="reduce-overhead", fullgraph=True
+    # )  # requires PyTorch 2.0 (optional)
+
     vq_ckpt = args.vq_ckpt
     if not os.path.exists(vq_ckpt):
         vq_ckpt = os.path.join(llamagen_path, vq_ckpt)
@@ -27,10 +66,15 @@ def do_sample(gpt_model, args, rank, device, npz_path):
     vq_model = FlexTokFromHub.from_pretrained(vq_ckpt)
     vq_model.to(device)
     vq_model.eval()
+    # vq_model = torch.compile(
+    #     vq_model, mode="reduce-overhead", fullgraph=True
+    # )  # requires PyTorch 2.0 (optional)
     dist.barrier()
 
     n = args.eval_per_gpu_batch_size
     global_batch_size = n * dist.get_world_size()
+    if rank == 0:
+        print(f"Global batch size: {global_batch_size} ({n} per GPU on {dist.get_world_size()} GPUs)")
     # To make things evenly-divisible, we'll sample a bit more than we need and then discard the extra samples:
     total_samples = int(
         math.ceil(args.eval_num_fid_samples / global_batch_size) * global_batch_size
@@ -46,7 +90,7 @@ def do_sample(gpt_model, args, rank, device, npz_path):
     ), "samples_needed_this_gpu must be divisible by the per-GPU batch size"
     iterations = int(samples_needed_this_gpu // n)
     pbar = range(iterations)
-    pbar = tqdm(pbar) if rank == 0 else pbar
+    pbar = tqdm(pbar, desc=f"Rank {rank}")# if rank == 0 else pbar
     total = 0
 
     # Use CPU storage and periodic gathering to manage memory efficiently
@@ -69,7 +113,7 @@ def do_sample(gpt_model, args, rank, device, npz_path):
         c_indices = torch.randint(0, args.num_classes, (n,), device=device)
 
         index_sample = generate(
-            gpt_model.module,
+            gpt_model,
             c_indices,
             args.latent_size,
             cfg_scale=args.cfg_scale,
@@ -136,7 +180,7 @@ def do_sample(gpt_model, args, rank, device, npz_path):
                 torch.zeros_like(rank_batch_labels, device=device)
                 for _ in range(dist.get_world_size())
             ]
-
+            dist.barrier()
             dist.all_gather(
                 gathered_images, rank_batch_images
             )
@@ -159,6 +203,7 @@ def do_sample(gpt_model, args, rank, device, npz_path):
 
     # Final processing and NPZ creation (data already collected via periodic gathering)
     del vq_model
+    del gpt_model
     torch.cuda.empty_cache()
     dist.barrier()
 

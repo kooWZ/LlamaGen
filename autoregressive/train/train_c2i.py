@@ -9,7 +9,6 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-import subprocess
 from glob import glob
 from copy import deepcopy
 import os
@@ -20,6 +19,8 @@ import yaml
 import threading
 from huggingface_hub import HfApi
 import base64
+import random
+import numpy as np
 
 try:
     import wandb
@@ -39,18 +40,14 @@ from dataset.build import build_dataset
 from autoregressive.models.gpt import GPT_models
 from evaluations.c2i.eval_lib import evaluate
 from autoregressive.sample.sample_c2i_lib import do_sample
-
+# torch._dynamo.config.optimize_ddp = False
 
 #################################################################################
 #                             Training Helper Functions                         #
 #################################################################################
 def creat_optimizer(model, weight_decay, learning_rate, betas, logger):
-    # start with all of the candidate parameters
     param_dict = {pn: p for pn, p in model.named_parameters()}
-    # filter out those that do not require grad
     param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-    # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
-    # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
     decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
     nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
     optim_groups = [
@@ -65,7 +62,6 @@ def creat_optimizer(model, weight_decay, learning_rate, betas, logger):
     logger.info(
         f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
     )
-    # Create AdamW optimizer and use the fused version if it is available
     fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
     extra_args = dict(fused=True) if fused_available else dict()
     optimizer = torch.optim.AdamW(
@@ -121,13 +117,17 @@ def save_checkpoint(
             args=(checkpoint_path, logger),
             daemon=True,
         ).start()
+    return checkpoint_path
 
 
-def do_eval(model, args, rank, device, epoch, checkpoint_dir):
-    npz_path = f"{checkpoint_dir}/eval_samples_epoch{epoch}.npz"
-    do_sample(model, args, rank, device, npz_path)
+@torch.compiler.disable(recursive=True)
+def do_eval(ckpt_path, args, rank, device, epoch, step, checkpoint_dir, logger):
+    npz_path = f"{checkpoint_dir}/eval_samples_epoch{epoch}_step{step}.npz"
+    do_sample(ckpt_path, args, rank, device, npz_path)
     if rank == 0:
-        return evaluate(npz_path)
+        result = evaluate(npz_path)
+        logger.info(f"Eval results at epoch {epoch}, step {step}: {result}")
+        return result
     else:
         return {}
 
@@ -139,6 +139,24 @@ def calculate_eta(step_time, total_steps_remaining):
     eta_minutes, eta_seconds = divmod(eta_seconds, 60)
     eta_hours, eta_minutes = divmod(eta_minutes, 60)
     return int(eta_hours), int(eta_minutes), int(eta_seconds)
+
+
+def seed_everything(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def check_results_dir(path):
+    if os.path.exists(path):
+        return path
+    base_path = os.path.abspath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../")
+    )
+    new_path = os.path.join(base_path, path)
+    print("Using new results_dir path:", new_path)
+    return new_path
 
 
 #################################################################################
@@ -155,18 +173,8 @@ def main(args):
     rank = dist.get_rank()
     device = rank % torch.cuda.device_count()
     seed = args.global_seed * dist.get_world_size() + rank
-    torch.manual_seed(seed)
+    seed_everything(seed)
     torch.cuda.set_device(device)
-
-    def check_results_dir(path):
-        if os.path.exists(path):
-            return path
-        base_path = os.path.abspath(
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../")
-        )
-        new_path = os.path.join(base_path, path)
-        print("Using new results_dir path:", new_path)
-        return new_path
 
     # Setup an experiment folder:
     results_dir = check_results_dir(args.results_dir)
@@ -213,10 +221,9 @@ def main(args):
         dropout_p = 0.0
     else:
         dropout_p = args.dropout_p
-    latent_size = args.latent_size
     model = GPT_models[args.gpt_model](
         vocab_size=args.vocab_size,
-        block_size=latent_size,
+        block_size=args.latent_size,
         num_classes=args.num_classes,
         cls_token_num=args.cls_token_num,
         model_type=args.gpt_type,
@@ -338,7 +345,7 @@ def main(args):
             else int(args.gpt_ckpt.split("/")[-1].split(".")[0].split("_")[-1])
         )
         start_epoch = int(train_steps / int(len(dataset) / args.global_batch_size))
-        train_steps = int(start_epoch * int(len(dataset) / args.global_batch_size))
+        train_steps = int(start_epoch * int(len(dataset) / args.global_batch_size)) + 1
         del checkpoint
         logger.info(f"Resume training from checkpoint: {args.gpt_ckpt}")
         logger.info(f"Initial state: steps={train_steps}, epochs={start_epoch}")
@@ -355,9 +362,9 @@ def main(args):
         model = torch.compile(model)  # requires PyTorch 2.0
 
     model = DDP(model.to(device), device_ids=[args.gpu])
-    model.train()  # important! This enables embedding dropout for classifier-free guidance
+    model.train()
     if args.ema:
-        ema.eval()  # EMA model should always be in eval mode
+        ema.eval()
 
     ptdtype = {"none": torch.float32, "bf16": torch.bfloat16, "fp16": torch.float16}[
         args.mixed_precision
@@ -374,13 +381,13 @@ def main(args):
         ckpt_every = args.ckpt_every_iter
         logger.info(f"Using ckpt_every directly: {ckpt_every}")
 
-    if args.eval_every_epoch is not None:
-        eval_every = args.eval_every_epoch * len(loader)
-        logger.info(
-            f"Using eval_every_epoch: {args.eval_every_epoch}, calculated eval_every: {eval_every}"
-        )
-    else:
-        eval_every = args.eval_every_iter
+    # if args.eval_every_epoch is not None:
+    #     eval_every = args.eval_every_epoch * len(loader)
+    #     logger.info(
+    #         f"Using eval_every_epoch: {args.eval_every_epoch}, calculated eval_every: {eval_every}"
+    #     )
+    # else:
+    #     eval_every = args.eval_every_iter
 
     logger.info(f"Training for {args.epochs} epochs...")
     total_steps_remaining = args.epochs * len(loader) - train_steps
@@ -488,24 +495,34 @@ def main(args):
                     extra_metrics["timing/save_checkpoint"] = ckpt_time
                 dist.barrier()
 
-            if (
-                eval_every is not None
-                and train_steps % eval_every == 0
-                and train_steps > 0
-            ):
-                eval_start_time = time.time()
-                model.eval()
-                try:
-                    eval_metrics = do_eval(
-                        model, args, rank, device, epoch, checkpoint_dir
-                    )
-                    eval_metrics = {f"eval/{k}": v for k, v in eval_metrics.items()}
-                    eval_metrics["timing/eval_time_sec"] = time.time() - eval_start_time
-                    extra_metrics.update(eval_metrics)
-                except Exception as e:
-                    logger.warning(f"Evaluation failed: {e}")
-                dist.barrier()
-                model.train()
+                # if (
+                #     eval_every is not None
+                #     and train_steps % eval_every == 0
+                #     and train_steps > 0
+                # ):
+
+                latest_file = f"{results_dir}/latest.txt"
+                if os.path.exists(latest_file):
+                    with open(latest_file, "r") as f:
+                        ckpt_path = f.read().strip()
+                        logger.info(f"Evaluating checkpoint: {ckpt_path}")
+                    eval_start_time = time.time()
+                    # model.eval()
+                    try:
+                        eval_metrics = do_eval(
+                            ckpt_path, args, rank, device, epoch, train_steps, checkpoint_dir, logger
+                        )
+                        if rank == 0:
+                            eval_metrics = {f"eval/{k}": v for k, v in eval_metrics.items()}
+                            eval_metrics["timing/eval_time_sec"] = time.time() - eval_start_time
+                            extra_metrics.update(eval_metrics)
+                    except Exception as e:
+                        raise e
+                        logger.warning(f"Evaluation failed: {e}")
+                    dist.barrier()
+                    # model.train()
+                else:
+                    logger.warning(f"No checkpoint found at {latest_file}, skipping evaluation.")
 
             if train_steps % args.reduce_grad_norm_every_iter == 0:
                 reduce_tensor = torch.tensor(
