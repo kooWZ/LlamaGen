@@ -35,6 +35,14 @@ from tqdm import tqdm
 from glob import glob
 
 
+def convert_path(path, force=False):
+    if force:
+        return os.path.join(llamagen_path, path)
+    if os.path.exists(path) or os.path.isabs(path):
+        return path
+    else:
+        return os.path.join(llamagen_path, path)
+
 #################################################################################
 #                                  Training Loop                                #
 #################################################################################
@@ -64,7 +72,7 @@ def main(args):
             os.path.join(args.code_path, f"{args.dataset}{args.image_size}_labels"),
             exist_ok=True,
         )
-
+    dist.barrier()
     done_files = glob(
         os.path.join(
             args.code_path, f"{args.dataset}{args.image_size}_codes", f"{rank}_*.npy"
@@ -74,7 +82,7 @@ def main(args):
     print(f"Rank {rank} has done {len(done_files)} files, last index {last_index}.")
 
     # create and load model
-    titok_tokenizer = TiTok.from_pretrained("yucornetto/tokenizer_titok_l32_imagenet")
+    titok_tokenizer = TiTok.from_pretrained(args.ckpt_path).to(device)
     titok_tokenizer.eval()
     titok_tokenizer.requires_grad_(False)
 
@@ -121,7 +129,7 @@ def main(args):
 
     # Initialize progress bar for rank 0 or single process
     progress_bar = tqdm(
-        loader, desc="Processing", disable=(not args.single and rank != 0)
+        loader, desc="Processing", #disable=(not args.single and rank != 0)
     )
 
     total = 0
@@ -130,14 +138,13 @@ def main(args):
     index = 0
     for p, x, y in progress_bar:
         if index > last_index:
-            x = x.to(device)
-            x_all = x.flatten(0, 1)
-            encoded_tokens = titok_tokenizer.encode(x_all.to(device))[1][
+            x = x.to(device).flatten(0, 1)
+            encoded_tokens = titok_tokenizer.encode(x)[1][
                 "min_encoding_indices"
             ]
-            codes = torch.cat(encoded_tokens, dim=0)
+            codes = encoded_tokens.flatten(0, 1)
 
-            x = codes.detach().cpu().numpy()
+            x = codes.cpu().numpy()
             x_concat.append(x)
             y_concat.append(
                 {"label": y.item() if isinstance(y, torch.Tensor) else y, "path": p}
@@ -183,9 +190,14 @@ if __name__ == "__main__":
         default="/root/kongly/AR/LlamaGen/dataset/ImageNet-1k/data/train",
     )
     parser.add_argument(
+        "--ckpt-path",
+        type=str,
+        default="outputs/ckpts/titok_bl128",
+    )
+    parser.add_argument(
         "--code-path",
         type=str,
-        default="/root/kongly/AR/LlamaGen/dataset/ImageNet-1k/flextok_codes/large/random_crop",
+        default="dataset/ImageNet-1k/titok_codes/",
     )
     parser.add_argument("--dataset", type=str, default="imagenet")
     parser.add_argument(
@@ -194,8 +206,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--crop-range", type=float, default=1.1, help="expanding range of center crop"
     )
-    parser.add_argument("--num-workers", type=int, default=24)
+    parser.add_argument("--num-workers", type=int, default=16)
     parser.add_argument("--global-seed", type=int, default=42)
     parser.add_argument("--single", action="store_true")
     args = parser.parse_args()
+
+    args.code_path = convert_path(args.code_path, force=True)
+    args.ckpt_path = convert_path(args.ckpt_path, force=True)
+    assert os.path.exists(args.data_path), f"data path {args.data_path} does not exist!"
     main(args)

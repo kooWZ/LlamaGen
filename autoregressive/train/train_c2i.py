@@ -39,7 +39,8 @@ from utils.lr_scheduler import CosineAnnealingWarmupLR
 from dataset.build import build_dataset
 from autoregressive.models.gpt import GPT_models
 from evaluations.c2i.eval_lib import evaluate
-from autoregressive.sample.sample_c2i_lib import do_sample
+from autoregressive.sample.sample_c2i_lib import do_sample_flextok, do_sample_titok
+
 # torch._dynamo.config.optimize_ddp = False
 
 #################################################################################
@@ -123,7 +124,13 @@ def save_checkpoint(
 @torch.compiler.disable(recursive=True)
 def do_eval(ckpt_path, args, rank, device, epoch, step, checkpoint_dir, logger):
     npz_path = f"{checkpoint_dir}/eval_samples_epoch{epoch}_step{step}.npz"
-    do_sample(ckpt_path, args, rank, device, npz_path)
+    if args.decoder_type == "flextok":
+        do_sample_flextok(ckpt_path, args, rank, device, npz_path)
+    elif args.decoder_type == "titok":
+        do_sample_titok(ckpt_path, args, rank, device, npz_path)
+    else:
+        logger.warning(f"Unknown decoder_type {args.decoder_type}, skipping evaluation.")
+        return {}
     if rank == 0:
         result = evaluate(npz_path)
         logger.info(f"Eval results at epoch {epoch}, step {step}: {result}")

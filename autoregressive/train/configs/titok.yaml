@@ -1,22 +1,22 @@
 dataset: "imagenet_code"
 num_classes: 1000
-code_path: "ImageNet-1k/flextok_codes/"
+code_path: "ImageNet-1k/titok_codes/h5_dataset/"
 
 auto_resume: true
 # gpt_ckpt: "outputs/ckpts/92_1163523.pt"
-results_dir: "outputs/meta_new"
+results_dir: "outputs/titok_bl128"
 upload_to_hf: false
 
 ema: false
 
 gpt_model: "GPT-Mini"
 gpt_type: "c2i"
-vocab_size: 64000
+vocab_size: 8192
 cls_token_num: 1
 dropout_p: 0.1
 token_dropout_p: 0.1
 drop_path_rate: 0.0
-latent_size: 256
+latent_size: 128
 use_liger: false
 
 no_compile: false
@@ -44,18 +44,17 @@ final_lr: 1.2e-5
 weight_decay: 5.0e-2
 beta1: 0.9
 beta2: 0.95
-# warmup_steps: 1000
 warmup_epochs: 30
 
 wandb_project: "LlamaGen"
-wandb_run_name: "meta_new_fp32"
+wandb_run_name: "titok_bl128_fp32"
 wandb_tags: []
 wandb_notes: null
 wandb_entity: "koowz-FVL25"
 wandb_key: null
 
-decoder_type: "flextok"
-vq_ckpt: "outputs/ckpts/flextok_d12_d12_in1k/"
+decoder_type: "titok"
+vq_ckpt: "outputs/ckpts/titok_bl128/"
 eval_per_gpu_batch_size: 64
 eval_num_fid_samples: 50000
 eval_gather_freq: 10

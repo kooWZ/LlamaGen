@@ -22,7 +22,7 @@ llamagen_path = os.path.abspath(os.path.join(current_dir, "../../"))
 sys.path.append(llamagen_path)
 from autoregressive.models.gpt import GPT_models
 
-from autoregressive.sample.sample_c2i_lib import do_sample
+from autoregressive.sample.sample_c2i_lib import do_sample_flextok
 from evaluations.c2i.eval_lib import evaluate
 
 
@@ -83,7 +83,7 @@ def main(args):
     else:
         print(f"no model compile")
     npz_file = os.path.join(args.save_to, sample_info, "samples.npz")
-    do_sample(gpt_model, args, rank, device, npz_file)
+    do_sample_flextok(gpt_model, args, rank, device, npz_file)
     if rank == 0:
         print("Sampling done. Start evaluation...")
     dist.barrier()
