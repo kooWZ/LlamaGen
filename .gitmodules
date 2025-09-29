@@ -1,3 +1,7 @@
 [submodule "external_tokenizers/flextok"]
 	path = external_tokenizers/flextok
 	url = git@github.com:apple/ml-flextok.git
+
+[submodule "external_tokenizers/TiTok"]
+	path = external_tokenizers/TiTok
+	url = git@github.com:bytedance/1d-tokenizer.git
