@@ -112,7 +112,7 @@ if __name__ == "__main__":
 
     processes = []
     for rank, files in rank_files.items():
-        p = Process(target=process_rank, args=(rank, files))
+        p = Process(target=process_rank, args=(rank, files, args))
         p.start()
         processes.append(p)
 
