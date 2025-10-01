@@ -15,7 +15,7 @@ def create_logger(logging_dir):
     """
     if dist.get_rank() == 0:  # real logger
         handlers = [logging.StreamHandler()]
-        if os.path.exists(logging_dir):
+        if logging_dir is not None and os.path.exists(logging_dir):
             handlers.append(logging.FileHandler(f"{logging_dir}/log.txt"))
         logging.basicConfig(
             level=logging.INFO,
