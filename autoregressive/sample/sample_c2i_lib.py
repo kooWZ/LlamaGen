@@ -118,7 +118,7 @@ def do_sample_flextok(ckpt_path, args, rank, device, npz_path):
         index_sample = generate(
             gpt_model,
             c_indices,
-            args.latent_size,
+            args.latent_size if args.eval_latent_size is None else args.eval_latent_size,
             cfg_scale=args.cfg_scale,
             cfg_interval=args.cfg_interval,
             temperature=args.temperature,

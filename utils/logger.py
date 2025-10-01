@@ -1,6 +1,7 @@
 import logging
 import torch.distributed as dist
 import base64
+import os
 try:
     import wandb
 
@@ -13,11 +14,14 @@ def create_logger(logging_dir):
     Create a logger that writes to a log file and stdout.
     """
     if dist.get_rank() == 0:  # real logger
+        handlers = [logging.StreamHandler()]
+        if os.path.exists(logging_dir):
+            handlers.append(logging.FileHandler(f"{logging_dir}/log.txt"))
         logging.basicConfig(
             level=logging.INFO,
             format='[\033[34m%(asctime)s\033[0m] %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S',
-            handlers=[logging.StreamHandler(), logging.FileHandler(f"{logging_dir}/log.txt")]
+            handlers=handlers
         )
         logger = logging.getLogger(__name__)
     else:  # dummy logger (does nothing)

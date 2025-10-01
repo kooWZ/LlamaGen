@@ -1,0 +1,69 @@
+dataset: "imagenet_code"
+num_classes: 1000
+code_path: "ImageNet-1k/flextok_codes/"
+
+auto_resume: true
+gpt_ckpt: "outputs/meta_new/000-GPT-Mini/checkpoints/final_0375300.pt"
+results_dir: "outputs/meta_new"
+upload_to_hf: false
+
+ema: false
+
+gpt_model: "GPT-Mini"
+gpt_type: "c2i"
+vocab_size: 64000
+cls_token_num: 1
+dropout_p: 0.1
+token_dropout_p: 0.1
+drop_path_rate: 0.0
+latent_size: 256
+use_liger: false
+
+no_compile: false
+
+epochs: 300
+global_batch_size: 1024
+global_seed: 42
+num_workers: 16
+gradient_accumulation_steps: 1
+mixed_precision: "bf16"
+fp32_attention: true
+
+max_grad_norm: 1.0
+grad_norm_threshold: 10.0
+check_grad_norm_for_skip: false
+
+ckpt_every_epoch: 5
+do_eval: true
+# eval_every_iter: 20
+reduce_grad_norm_every_iter: 1
+
+lr: 1.0e-3
+init_lr: 1.0e-6
+final_lr: 1.2e-5
+weight_decay: 5.0e-2
+beta1: 0.9
+beta2: 0.95
+# warmup_steps: 1000
+warmup_epochs: 30
+
+wandb_project: "LlamaGen"
+wandb_run_name: "meta_new_fp32"
+wandb_tags: []
+wandb_notes: null
+wandb_entity: "koowz-FVL25"
+wandb_key: null
+
+decoder_type: "flextok"
+vq_ckpt: "outputs/ckpts/flextok_d12_d12_in1k/"
+eval_per_gpu_batch_size: 64
+eval_num_fid_samples: 50000
+eval_gather_freq: 10
+eval_latent_size: 32
+cfg_scale: 1
+cfg_interval: -1
+temperature: 1.0
+top_k: 0
+top_p: 1.0
+decoder_timesteps: 25
+decoder_guidance_scale: 15
