@@ -26,8 +26,8 @@ from autoregressive.sample.sample_c2i_lib import do_sample_flextok, do_sample_ti
 
 
 @torch.compiler.disable(recursive=True)
-def do_eval(ckpt_path, args, rank, device, epoch, step, checkpoint_dir, logger, remove_npz=False):
-    npz_path = f"{checkpoint_dir}/eval_samples_epoch{epoch}_step{step}.npz"
+def do_eval(ckpt_path, args, rank, device, filename, checkpoint_dir, logger, remove_npz=False):
+    npz_path = f"{checkpoint_dir}/eval_samples_{filename}.npz"
     if args.decoder_type == "flextok":
         do_sample_flextok(ckpt_path, args, rank, device, npz_path)
     elif args.decoder_type == "titok":
@@ -41,7 +41,7 @@ def do_eval(ckpt_path, args, rank, device, epoch, step, checkpoint_dir, logger, 
         result = evaluate(npz_path)
         if remove_npz:
             os.remove(npz_path)
-        logger.info(f"Eval results at epoch {epoch}, step {step}: {result}")
+        logger.info(f"Eval results at {filename}: {result}")
         return result
     else:
         return {}
@@ -91,11 +91,10 @@ def main(args):
         args,
         rank,
         device,
-        "temp",
-        "temp",
+        args.eval_filename,
         os.path.dirname(gpt_ckpt),
         logger,
-        remove_npz=True
+        remove_npz=True,
     )
     logger.info(f"Eval took {time.time() - eval_start_time} seconds.")
     dist.barrier()

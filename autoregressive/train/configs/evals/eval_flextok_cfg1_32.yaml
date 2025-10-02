@@ -67,3 +67,4 @@ top_k: 0
 top_p: 1.0
 decoder_timesteps: 25
 decoder_guidance_scale: 15
+eval_filename: "eval_flextok_cfg1_32"
