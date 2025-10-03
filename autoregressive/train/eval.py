@@ -6,7 +6,6 @@ import torch
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 import torch.distributed as dist
-from glob import glob
 import os
 import time
 import argparse
@@ -21,7 +20,7 @@ llamagen_path = os.path.abspath(os.path.join(current_dir, "../../"))
 sys.path.append(llamagen_path)
 from utils.logger import create_logger
 from utils.distributed import init_distributed_mode
-from evaluations.c2i.eval_lib import evaluate
+from evaluations.c2i.torch_eval import evaluate
 from autoregressive.sample.sample_c2i_lib import do_sample_flextok, do_sample_titok
 
 

@@ -38,7 +38,7 @@ from utils.ema import update_ema, requires_grad
 from utils.lr_scheduler import CosineAnnealingWarmupLR
 from dataset.build import build_dataset
 from autoregressive.models.gpt import GPT_models
-from evaluations.c2i.eval_lib import evaluate
+from evaluations.c2i.torch_eval import evaluate
 from autoregressive.sample.sample_c2i_lib import do_sample_flextok, do_sample_titok
 
 # torch._dynamo.config.optimize_ddp = False

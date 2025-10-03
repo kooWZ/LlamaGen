@@ -23,7 +23,7 @@ sys.path.append(llamagen_path)
 from autoregressive.models.gpt import GPT_models
 
 from autoregressive.sample.sample_c2i_lib import do_sample_flextok
-from evaluations.c2i.eval_lib import evaluate
+from evaluations.c2i.torch_eval import evaluate
 
 
 def main(args):
