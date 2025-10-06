@@ -12,7 +12,7 @@ import argparse
 import yaml
 import random
 import numpy as np
-
+import json
 import sys
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -41,6 +41,9 @@ def do_eval(ckpt_path, args, rank, device, filename, checkpoint_dir, logger, rem
         if remove_npz:
             os.remove(npz_path)
         logger.info(f"Eval results at {filename}: {result}")
+        if args.save_eval_results_to is not None:
+            with open(args.save_eval_results_to, "w") as f:
+                json.dump(result, f, indent=4)
         return result
     else:
         return {}
@@ -106,11 +109,34 @@ if __name__ == "__main__":
         "--config",
         type=str,
         default="configs/test.yaml",
+        help="Path to the YAML configuration file",
+    )
+    parser.add_argument(
+        "--override",
+        nargs="*",
+        help="Additional configuration options in the format key=value",
     )
     args = parser.parse_args()
 
     with open(args.config, "r") as file:
         config = yaml.load(file, Loader=yaml.FullLoader)
+
+    if args.override:
+        for override_arg in args.override:
+            try:
+                key, value = override_arg.split("=", 1)
+                if value.isdigit():
+                    value = int(value)
+                elif value.lower() in ["true", "false"]:
+                    value = value.lower() == "true"
+                elif value.replace(".", "", 1).isdigit():
+                    value = float(value)
+                config[key] = value
+            except ValueError:
+                print(
+                    f"Invalid override argument: {override_arg}. Expected format is key=value."
+                )
+                exit(1)
 
     class Args:
         def __init__(self, config):
