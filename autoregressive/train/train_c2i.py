@@ -305,14 +305,20 @@ def main(args):
         warmup_steps = args.warmup_steps
         logger.info(f"Using warmup_steps directly: {warmup_steps}")
 
-    scheduler = CosineAnnealingWarmupLR(
-        optimizer,
-        init_lr=args.init_lr,
-        base_lr=args.lr,
-        final_lr=args.final_lr,
-        warmup_steps=warmup_steps,
-        total_steps=total_steps,
-    )
+    if args.scheduler == "cosine_with_warmup":
+        scheduler = CosineAnnealingWarmupLR(
+            optimizer,
+            init_lr=args.init_lr,
+            base_lr=args.lr,
+            final_lr=args.final_lr,
+            warmup_steps=warmup_steps,
+            total_steps=total_steps,
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.ConstantLR(
+            optimizer, factor=1.0, total_iters=total_steps
+        )
+        logger.info(f"Using ConstantLR scheduler.")
 
     # Log dataset info to wandb
     wandb_extra_config["dataset_size"] = len(dataset)
