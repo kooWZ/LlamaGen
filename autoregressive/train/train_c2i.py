@@ -46,7 +46,7 @@ from autoregressive.sample.sample_c2i_lib import do_sample_flextok, do_sample_ti
 #################################################################################
 #                             Training Helper Functions                         #
 #################################################################################
-def creat_optimizer(model, weight_decay, learning_rate, betas, logger):
+def creat_optimizer(model, weight_decay, learning_rate, betas, logger, args):
     param_dict = {pn: p for pn, p in model.named_parameters()}
     param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
     decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
@@ -272,7 +272,7 @@ def main(args):
 
     # Setup optimizer
     optimizer = creat_optimizer(
-        model, args.weight_decay, args.lr, (args.beta1, args.beta2), logger
+        model, args.weight_decay, args.lr, (args.beta1, args.beta2), logger, args
     )
 
     # Setup data:
