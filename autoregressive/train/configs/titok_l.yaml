@@ -29,11 +29,11 @@ gradient_accumulation_steps: 1
 mixed_precision: "bf16"
 fp32_attention: true
 
-max_grad_norm: 1.0
+max_grad_norm: 0.5
 grad_norm_threshold: 10.0
 check_grad_norm_for_skip: false
 
-ckpt_every_epoch: 5
+ckpt_every_epoch: 10
 do_eval: true
 # eval_every_iter: 20
 reduce_grad_norm_every_iter: 1
@@ -45,6 +45,7 @@ weight_decay: 5.0e-2
 scheduler: "constant"
 beta1: 0.9
 beta2: 0.95
+eps: 0.001
 warmup_epochs: 30
 
 wandb_project: "LlamaGen"

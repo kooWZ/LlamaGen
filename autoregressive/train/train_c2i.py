@@ -65,6 +65,8 @@ def creat_optimizer(model, weight_decay, learning_rate, betas, logger):
     )
     fused_available = "fused" in inspect.signature(torch.optim.AdamW).parameters
     extra_args = dict(fused=True) if fused_available else dict()
+    if args.eps is not None:
+        extra_args["eps"] = args.eps
     optimizer = torch.optim.AdamW(
         optim_groups, lr=learning_rate, betas=betas, **extra_args
     )
