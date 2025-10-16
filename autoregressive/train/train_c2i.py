@@ -74,6 +74,7 @@ def creat_optimizer(model, weight_decay, learning_rate, betas, logger, args):
     return optimizer
 
 def _upload_to_hf(checkpoint_path, logger):
+    return
     try:
         api = HfApi()
         api.upload_file(
@@ -81,9 +82,7 @@ def _upload_to_hf(checkpoint_path, logger):
             path_in_repo=f"checkpoints/{checkpoint_path.split('/')[-1]}",
             repo_id="lykong/ar_1d_tok",
             repo_type="model",
-            token=base64.b64decode(
-                "aGZfemRwT0Fjd2RJZ0ZyRlpjekRxbXJFS21GaWlUaHZFZUVDZQ=="
-            ).decode("utf-8"),
+            token=""
         )
         logger.info(f"[HF Upload] Uploaded {checkpoint_path}")
     except Exception as e:
@@ -297,17 +296,17 @@ def main(args):
     # Setup learning rate scheduler
     total_steps = args.epochs * len(loader)
 
-    # Calculate warmup steps from warmup epochs if available
-    if args.warmup_epochs is not None:
-        warmup_steps = args.warmup_epochs * len(loader)
-        logger.info(
-            f"Using warmup_epochs: {args.warmup_epochs}, calculated warmup_steps: {warmup_steps}"
-        )
-    else:
-        warmup_steps = args.warmup_steps
-        logger.info(f"Using warmup_steps directly: {warmup_steps}")
-
     if args.scheduler == "cosine_with_warmup":
+        # Calculate warmup steps from warmup epochs if available
+        if args.warmup_epochs is not None:
+            warmup_steps = args.warmup_epochs * len(loader)
+            logger.info(
+                f"Using warmup_epochs: {args.warmup_epochs}, calculated warmup_steps: {warmup_steps}"
+            )
+        else:
+            warmup_steps = args.warmup_steps
+            logger.info(f"Using warmup_steps directly: {warmup_steps}")
+
         scheduler = CosineAnnealingWarmupLR(
             optimizer,
             init_lr=args.init_lr,
