@@ -4,7 +4,7 @@ code_path: "ImageNet-1k/titok_codes/h5_dataset/"
 
 auto_resume: true
 # gpt_ckpt: "outputs/ckpts/92_1163523.pt"
-results_dir: "outputs/titok_L_const_lr"
+results_dir: "outputs/titok_l_llamagen_recipe"
 upload_to_hf: false
 
 ema: false
@@ -21,15 +21,15 @@ use_liger: false
 
 no_compile: false
 
-epochs: 2000
-global_batch_size: 1024
+epochs: 300
+global_batch_size: 256
 global_seed: 42
 num_workers: 16
 gradient_accumulation_steps: 1
 mixed_precision: "bf16"
 fp32_attention: true
 
-max_grad_norm: 0.5
+max_grad_norm: 1
 grad_norm_threshold: 10.0
 check_grad_norm_for_skip: false
 
@@ -45,11 +45,11 @@ weight_decay: 5.0e-2
 scheduler: "constant"
 beta1: 0.9
 beta2: 0.95
-eps: 0.001
-warmup_epochs: 30
+eps: 1.0e-6
+warmup_epochs: 80
 
 wandb_project: "LlamaGen"
-wandb_run_name: "titok_L_const_lr"
+wandb_run_name: "titok_l_llamagen_recipe"
 wandb_tags: []
 wandb_notes: null
 wandb_entity: "koowz-FVL25"
