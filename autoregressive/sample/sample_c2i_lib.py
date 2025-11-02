@@ -1,3 +1,4 @@
+import argparse
 import torch
 import torch.distributed as dist
 from tqdm import tqdm
@@ -12,6 +13,17 @@ llamagen_path = os.path.abspath(os.path.join(current_dir, "../../"))
 sys.path.append(llamagen_path)
 from autoregressive.models.generate import generate
 from autoregressive.models.gpt import GPT_models
+
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
 
 
 class FlexTokDecoder:
@@ -81,13 +93,122 @@ class Args:
 
 
 class OurDecoder:
-    def __init__(self, config_file, vq_ckpt, device):
-        ours_path = os.path.abspath(os.path.join(llamagen_path, "external_tokenizers/postTok"))
-        sys.path.append(ours_path)
-        from ruamel import yaml
-        from train.train_tokenizer import build_parser
+    def build_parser(self):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--config", type=str, default='configs/tokenizer/cnn_llamagen_vq16.yaml', help="config file used to specify parameters")
 
-        parser = build_parser()
+        parser.add_argument("--exp-index", type=str, default=None, help="experiment index")
+        parser.add_argument("--data-path", type=str, default="ImageNet2012/train")
+        parser.add_argument("--eval-data-path", type=str, default="ImageNet2012/val")
+        parser.add_argument("--cloud-save-path", type=str, help='please specify a cloud disk path, if not, local path')
+        parser.add_argument("--no-local-save", type=str2bool, default=False, help='no save checkpoints to local path for limited disk volume')
+        parser.add_argument("--vq-model", type=str, default="VQ-16")
+        parser.add_argument("--vq-ckpt", type=str, default=None, help="ckpt path for resume training")
+        parser.add_argument("--finetune", type=str2bool, default=False, help="finetune a pre-trained vq model")
+        parser.add_argument("--ema", type=str2bool, default=True, help="whether using ema training")
+        parser.add_argument("--codebook-size", type=int, default=16384, help="codebook size for vector quantization")
+        parser.add_argument("--codebook-embed-dim", type=int, default=8, help="codebook dimension for vector quantization")
+        parser.add_argument("--codebook-l2-norm", type=str2bool, default=True, help="l2 norm codebook")
+        parser.add_argument("--codebook-weight", type=float, default=1.0, help="codebook loss weight for vector quantization")
+        parser.add_argument("--entropy-loss-ratio", type=float, default=0.0, help="entropy loss ratio in codebook loss")
+        parser.add_argument("--vq-loss-ratio", type=float, default=1.0, help="vq loss ratio in codebook loss")
+        parser.add_argument("--commit-loss-beta", type=float, default=0.25, help="commit loss beta in codebook loss")
+        parser.add_argument("--reconstruction-weight", type=float, default=1.0, help="reconstruction loss weight of image pixel")
+        parser.add_argument("--reconstruction-loss", type=str, default='l2', help="reconstruction loss type of image pixel")
+        parser.add_argument("--kl-loss-weight", type=float, default=0.000001)
+        parser.add_argument("--tau", type=float, default=0.1)
+        parser.add_argument("--num-codebooks", type=int, default=1)
+
+        parser.add_argument("--perceptual-weight", type=float, default=1.0, help="perceptual loss weight of LPIPS")
+        parser.add_argument("--perceptual-loss", type=str, default='vgg', help="perceptual loss type of LPIPS", choices=['vgg', 'timm', 'tv'])
+        parser.add_argument("--perceptual-model", type=str, default='vgg', help="perceptual loss model of LPIPS")
+        parser.add_argument("--perceptual-dino-variants", type=str, default='depth12_no_train', help="perceptual loss model of LPIPS")
+        parser.add_argument("--perceptual-intermediate-loss", type=str2bool, default=False, help="perceptual loss compute at intermedia features of LPIPS")
+        parser.add_argument("--perceptual-logit-loss", type=str2bool, default=False, help="perceptual loss compute at logits of LPIPS")
+        parser.add_argument("--perceptual-resize", type=str2bool, default=False, help="perceptual loss compute at resized images of LPIPS")
+        parser.add_argument("--perceptual-warmup", type=int, default=None, help="iteration to warmup perceptual loss")
+
+        parser.add_argument("--disc-weight", type=float, default=0.5, help="discriminator loss weight for gan training")
+        parser.add_argument("--disc-start", type=int, default=20000, help="iteration to start discriminator training and loss")
+        parser.add_argument("--disc-dim", type=int, default=64, help="discriminator channel base dimension")
+        parser.add_argument("--disc-type", type=str, choices=['patchgan', 'stylegan', 'maskbit', 'dino'], default='patchgan', help="discriminator type")
+        parser.add_argument("--disc-loss", type=str, choices=['hinge', 'vanilla', 'non-saturating'], default='hinge', help="discriminator loss")
+        parser.add_argument("--gen-loss", type=str, choices=['hinge', 'non-saturating'], default='hinge', help="generator loss for gan training")
+        parser.add_argument("--lecam-loss-weight", type=float, default=None)
+        parser.add_argument("--use-diff-aug",type=str2bool, default=False)
+        parser.add_argument("--disc-cr-loss-weight", type=float, default=0.0, help="discriminator consistency loss weight for gan training")
+        parser.add_argument("--disc-adaptive-weight",type=str2bool, default=False)
+
+        parser.add_argument("--compile", type=str2bool, default=False)
+        parser.add_argument("--dropout-p", type=float, default=0.0, help="dropout_p")
+        parser.add_argument("--results-dir", type=str, default="results_tokenizer_image")
+        parser.add_argument("--dataset", type=str, default='imagenet')
+        parser.add_argument("--image-size", type=int, choices=[256, 512], default=256)
+        parser.add_argument("--epochs", type=int, default=40)
+        parser.add_argument("--optimizer", type=str, default='adam')
+        parser.add_argument("--lr", type=float, default=1e-4)
+        parser.add_argument("--lr_warmup_epochs", type=int, default=1)
+        parser.add_argument("--lr_scheduler", type=str, default='none')
+        parser.add_argument("--weight-decay", type=float, default=5e-2, help="Weight decay to use.")
+        parser.add_argument("--beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
+        parser.add_argument("--beta2", type=float, default=0.95, help="The beta2 parameter for the Adam optimizer.")
+        parser.add_argument("--max-grad-norm", default=1.0, type=float, help="Max gradient norm.")
+
+        parser.add_argument("--global-batch-size", type=int, default=128)
+        parser.add_argument("--global-seed", type=int, default=0)
+        parser.add_argument("--num-workers", type=int, default=16)
+        parser.add_argument("--log-every", type=int, default=100)
+        parser.add_argument("--vis-every", type=int, default=5000)
+        parser.add_argument("--ckpt-every", type=int, default=5000)
+        parser.add_argument("--eval-every", type=int, default=5000)
+        parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
+        parser.add_argument("--mixed-precision", type=str, default='bf16', choices=["none", "fp16", "bf16"]) 
+
+        parser.add_argument("--enc-type", type=str, default="cnn")
+        parser.add_argument("--dec-type", type=str, default="cnn")
+        parser.add_argument("--num-latent-tokens", type=int, default=None)
+        parser.add_argument("--encoder-model", type=str, default='vit_small_patch14_dinov2.lvd142m', help='encoder model name')
+        parser.add_argument("--decoder-model", type=str, default='vit_small_patch14_dinov2.lvd142m', help='decoder model name')
+        parser.add_argument("--encoder-tuning-method", type=str, default='full', help='tuning method for encoder', choices=['full', 'lora', 'frozen'])
+        parser.add_argument("--decoder-tuning-method", type=str, default='full', help='tuning method for decoder', choices=['full', 'lora', 'frozen'])
+        parser.add_argument("--encoder-pretrained", type=str2bool, default=True, help='load pre-trained weight for encoder')
+        parser.add_argument("--decoder-pretrained", type=str2bool, default=False, help='load pre-trained weight for decoder')
+        parser.add_argument("--encoder-local-ckpt", type=str, default="", help="Path to local encoder checkpoint (.pth) to avoid downloads.")
+        parser.add_argument("--decoder-local-ckpt", type=str, default="", help="Path to local decoder checkpoint (.pth) to avoid downloads.")
+        parser.add_argument("--encoder-patch-size", type=int, default=16, help='encoder patch size')
+        parser.add_argument("--decoder-patch-size", type=int, default=16, help='decoder patch size')
+        parser.add_argument("--to-pixel", type=str, default="linear")
+
+        # repa
+        parser.add_argument("--repa", type=str2bool, default=False, help='use repa')
+        parser.add_argument('--repa-model', type=str, default='vit_base_patch16_224', help='repa model name')
+        parser.add_argument('--repa-patch-size', type=int, default=16, help='repa patch size')
+        parser.add_argument('--repa-proj-dim', type=int, default=1024, help='repa embed dim')
+        parser.add_argument('--repa-loss-weight', type=float, default=0.1, help='repa loss weight')
+        parser.add_argument('--repa-align', type=str, default='global', help='align repa feature', choices=['global', 'avg_1d', 'avg_2d', 'avg_1d_shuffle'])
+        parser.add_argument('--repa-local-ckpt', type=str, default="", help="Path to local REPA teacher checkpoint (.pth).")
+        parser.add_argument('--cls-recon', type=str2bool, default=False, help='enable CLS reconstruction with REPA teacher')
+        parser.add_argument('--cls-recon-weight', type=float, default=0.03, help='CLS reconstruction loss weight')
+
+        # aux decoder
+        parser.add_argument("--aux-decoder-model", type=str, default='vit_tiny_patch14_dinov2_movq', help='aux decoder model name')
+        parser.add_argument("--aux-loss-mask", type=str2bool, default='False', help='compute loss only at mask region')
+        parser.add_argument("--aux-hog-decoder", type=str2bool, default=True, help='aux decoder hog decoder')
+        parser.add_argument("--aux-dino-decoder", type=str2bool, default=True, help='aux decoder dino decoder')
+        parser.add_argument("--aux-clip-decoder", type=str2bool, default=True, help='aux decoder hog decoder')
+        parser.add_argument("--aux-supcls-decoder", type=str2bool, default=True, help='aux decoder hog decoder')
+
+        # mask modeling
+        # make sure drop is 0.0 for not using mask modeling
+        parser.add_argument("--enc-token-drop", type=float, default=0.0, help='encoder token drop')
+        parser.add_argument("--enc-token-drop-max", type=float, default=0.75, help='maximum drop rate')
+
+        return parser
+
+    def __init__(self, config_file, vq_ckpt, device):
+        from ruamel import yaml
+
+        parser = self.build_parser()
         with open(config_file, "r", encoding="utf-8") as f:
             file_yaml = yaml.YAML()
             config_args = file_yaml.load(f)
@@ -98,8 +219,19 @@ class OurDecoder:
         self.vq_model.eval()
 
     def _build_model(self, vq_ckpt):
+        ours_path = os.path.abspath(
+            os.path.join(llamagen_path, "external_tokenizers/postTok")
+        )
+        sys.path.append(ours_path)
         from modelling.tokenizer import VQ_models
-        from utils.misc import load_model_state_dict
+        external_path = os.path.abspath(
+            os.path.join(
+                llamagen_path,
+                "external_tokenizers",
+            )
+        )
+        sys.path.append(external_path)
+        from postTok.utils.misc import load_model_state_dict
 
         args = self.dec_args
         ModelClass = VQ_models[args.vq_model]

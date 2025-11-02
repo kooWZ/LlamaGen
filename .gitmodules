@@ -5,3 +5,7 @@
 [submodule "external_tokenizers/TiTok"]
 	path = external_tokenizers/TiTok
 	url = git@github.com:bytedance/1d-tokenizer.git
+
+[submodule "external_tokenizers/postTok"]
+	path = external_tokenizers/postTok
+	url = git@github.com:dzj441/postTok.git
