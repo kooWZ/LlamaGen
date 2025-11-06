@@ -4,7 +4,7 @@ code_path: "ImageNet-1k/ours_0250000_codes/h5_dataset/"
 
 auto_resume: true
 # gpt_ckpt: "outputs/ckpts/92_1163523.pt"
-results_dir: "outputs/ours_0250000_B"
+results_dir: "outputs/ours_0250000_B_fix"
 upload_to_hf: false
 
 ema: false
@@ -57,7 +57,7 @@ wandb_key: null
 
 decoder_type: "ours"
 vq_config: "autoregressive/train/configs/postTok/simvq128.yaml"
-vq_ckpt: "outputs/ckpts/titok_bl128/"
+vq_ckpt: "outputs/ckpts/postTok_sim128/0250000.pth"
 eval_per_gpu_batch_size: 64
 eval_num_fid_samples: 50000
 eval_gather_freq: 10
