@@ -157,6 +157,7 @@ def build_parser():
     
     return parser
 
+
 def parse_args():
     parser = build_parser()
     parser.add_argument(
@@ -192,7 +193,8 @@ def parse_args():
     return args
 
 
-def build_model(args, device):
+def build_model(device):
+    args = parse_args()
     ModelClass = VQ_models[args.vq_model]
     model = ModelClass(
         image_size=args.image_size,
@@ -296,7 +298,7 @@ def main(args):
     print(f"Rank {rank} has done {len(done_files)} files, last index {last_index}.")
 
     # create and load model
-    model = build_model(args, device)
+    model = build_model(device)
     model.requires_grad_(False)
 
     # Setup data:
