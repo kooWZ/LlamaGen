@@ -168,16 +168,16 @@ def parse_args():
             "outputs/ckpts/postTok_sim128/0250000.pth",
         ),
     )
-    args = parser.parse_args()
-    args.config = os.path.join(
+    config_file = os.path.join(
         llamagen_path,
         "autoregressive/train/configs/postTok/simvq128.yaml",
     )
-    with open(args.config, "r", encoding="utf-8") as f:
+    with open(config_file, "r", encoding="utf-8") as f:
         file_yaml = yaml.YAML()
         config_args = file_yaml.load(f)
-        parser.set_defaults(**(config_args or {}))
+        parser.set_defaults(**config_args)
     args = parser.parse_args([])
+    args.config = config_file
     args.encoder_local_ckpt = os.path.join(
         llamagen_path,
         "outputs/ckpts/dinov2/dinov2_vitb14_pretrain.pth",
