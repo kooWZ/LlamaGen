@@ -290,7 +290,7 @@ class OurDecoder:
 
     def decode(self, arr, args):
         with torch.no_grad():
-            reconst = self.model.decode_from_ids(arr.to(self.device).contiguous()).cpu()
+            reconst = self.vq_model.decode_from_ids(arr.to(self.device).contiguous()).cpu()
         return reconst
 
     def denormalize(self, recon):
@@ -317,22 +317,23 @@ def do_sample(ckpt_path, args, rank, device, npz_path):
         use_liger=args.use_liger,
         fp32_attention=False,
     ).to(device)
-    checkpoint = torch.load(ckpt_path, map_location="cpu")
-    if args.from_fsdp:  # fsdp
-        model_weight = checkpoint
-    elif "model" in checkpoint:  # ddp
-        model_weight = checkpoint["model"]
-    elif "module" in checkpoint:  # deepspeed
-        model_weight = checkpoint["module"]
-    elif "state_dict" in checkpoint:
-        model_weight = checkpoint["state_dict"]
-    else:
-        raise Exception(
-            "please check model weight, maybe add --from-fsdp to run command"
-        )
-    gpt_model.load_state_dict(model_weight, strict=False)
+    if ckpt_path is not None:
+        checkpoint = torch.load(ckpt_path, map_location="cpu")
+        if args.from_fsdp:  # fsdp
+            model_weight = checkpoint
+        elif "model" in checkpoint:  # ddp
+            model_weight = checkpoint["model"]
+        elif "module" in checkpoint:  # deepspeed
+            model_weight = checkpoint["module"]
+        elif "state_dict" in checkpoint:
+            model_weight = checkpoint["state_dict"]
+        else:
+            raise Exception(
+                "please check model weight, maybe add --from-fsdp to run command"
+            )
+        gpt_model.load_state_dict(model_weight, strict=False)
+        del checkpoint
     gpt_model.eval()
-    del checkpoint
 
     vq_ckpt = args.vq_ckpt
     if not os.path.exists(vq_ckpt):
