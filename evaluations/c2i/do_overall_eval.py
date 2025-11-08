@@ -83,6 +83,7 @@ def main(args):
         print(f"Using DDP with {dist.get_world_size()} processes. Start sampling...")
     dist.barrier()
 
+    overall_data = {}
     for ckpt in sorted(list(os.listdir(args.gpt_ckpts))):
         if ckpt.endswith(".pt"):
             basename = ckpt.split(".")[0]
@@ -97,7 +98,16 @@ def main(args):
                     wandb.log(res, step=step)
                 except Exception as e:
                     print(f"Error upload to wandb {e}")
+                try:
+                    with open(os.path.join(args.gpt_ckpts, f"{basename}_result.json"), "r") as f:
+                        data = json.load(f)
+                        overall_data[basename] = data
+                except Exception as e:
+                    print(f"Error read eval json {e}")
             dist.barrier()
+    if rank == 0:
+        with open(os.path.join(args.gpt_ckpts, f"overall_result.json"), "w") as f:
+            json.dump(overall_data, f, indent=4)
     dist.destroy_process_group()
 
 def to_abs(path):
@@ -115,7 +125,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpts",
         type=str,
-        required=True
+        default="outputs/ours_0250000_B_fix/000-GPT-B/checkpoints"
     )
     cmdargs = parser.parse_args()
 
