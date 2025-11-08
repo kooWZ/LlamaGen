@@ -214,6 +214,18 @@ class OurDecoder:
             config_args = file_yaml.load(f)
             parser.set_defaults(**config_args)
         self.dec_args = parser.parse_args([])
+        self.dec_args.encoder_local_ckpt = os.path.join(
+            llamagen_path,
+            self.dec_args.encoder_local_ckpt,
+        )
+        self.dec_args.decoder_local_ckpt = os.path.join(
+            llamagen_path,
+            self.dec_args.decoder_local_ckpt,
+        )
+        self.dec_args.repa_local_ckpt = os.path.join(
+            llamagen_path,
+            self.dec_args.repa_local_ckpt,
+        )
         self.device = device
         self.vq_model = self._build_model(vq_ckpt)
         self.vq_model.eval()
