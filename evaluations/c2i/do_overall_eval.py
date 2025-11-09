@@ -120,7 +120,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         type=str,
-        default="configs/ours_0250000_b.yaml",
+        default="autoregressive/train/configs/ours_0250000_b.yaml",
     )
     parser.add_argument(
         "--ckpts",
