@@ -25,6 +25,23 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError("Boolean value expected.")
 
+class FinalDecoder:
+    def __init__(self, config_path, ckpt_path, device):
+        final_path = os.path.abspath(os.path.join(llamagen_path, "external_tokenizers/final/"))
+        sys.path.append(final_path)
+        from final import build_and_load_model
+        self.model = build_and_load_model(config_path, ckpt_path)[1].to(device)
+
+    def encode(self, img):
+        return self.model.encode_to_ids(img) # tensor of [1, 576]
+
+    def decode(self, ids):
+        return self.model.decode_from_ids(ids).detach() # tensor of [1, 3, 256, 256]
+
+    def denormalize(self, recon): # recon should be [3, 256, 256]
+        dfi = torch.clamp((recon + 1) / 2, 0, 1)
+        dfiimg = (dfi.permute(1, 2, 0).cpu().numpy() * 255).round().astype(np.uint8)
+        return dfiimg
 
 class FlexTokDecoder:
     def __init__(self, vq_ckpt, device):
