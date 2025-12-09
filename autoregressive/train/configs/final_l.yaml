@@ -4,12 +4,12 @@ code_path: "ImageNet-1k/final_codes/h5_dataset/"
 
 auto_resume: true
 # gpt_ckpt: "outputs/ckpts/92_1163523.pt"
-results_dir: "outputs/final_semtok-1stage"
+results_dir: "outputs/final_semtok-1stage-L"
 upload_to_hf: false
 
 ema: false
 
-gpt_model: "GPT-B"
+gpt_model: "GPT-L"
 gpt_type: "c2i"
 vocab_size: 16384
 cls_token_num: 1
@@ -49,7 +49,7 @@ eps: 1.0e-6
 warmup_epochs: 80
 
 wandb_project: "LlamaGen"
-wandb_run_name: "final_semtok-1stage"
+wandb_run_name: "final_semtok-1stage-L"
 wandb_tags: []
 wandb_notes: null
 wandb_entity: "koowz-FVL25"
