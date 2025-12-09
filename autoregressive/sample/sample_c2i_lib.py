@@ -378,6 +378,12 @@ def do_sample(ckpt_path, args, rank, device, npz_path):
             vq_config = os.path.join(llamagen_path, vq_config)
         assert os.path.exists(vq_config), f"VQ model config {vq_config} does not exist!"
         decoder = OurDecoder(vq_config, vq_ckpt, device)
+    elif args.decoder_type == "final":
+        vq_config = args.vq_config
+        if not os.path.exists(vq_config):
+            vq_config = os.path.join(llamagen_path, vq_config)
+        assert os.path.exists(vq_config), f"VQ model config {vq_config} does not exist!"
+        decoder = FinalDecoder(vq_config, vq_ckpt, device)
     else:
         raise NotImplementedError(f"Decoder type {args.decoder_type} not implemented")
     dist.barrier()
