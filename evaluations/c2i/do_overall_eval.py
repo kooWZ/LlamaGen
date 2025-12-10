@@ -52,7 +52,7 @@ def do_eval(ckpt, rank, device, name, args):
             os.remove(npz_file)
         except:
             pass
-        print(f"Eval result: {eval_result}")
+        print(f"Ckpt {ckpt} Eval result: {eval_result}")
         result_file = os.path.join(save_to_folder, f"{name}_result.json")
         with open(result_file, "w") as f:
             json.dump(eval_result, f, indent=4)
