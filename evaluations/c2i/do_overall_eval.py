@@ -77,7 +77,7 @@ def main(args):
     torch.cuda.set_device(device)
     if rank == 0:
         try:
-            init_wandb('ours_0250000_b_eval', args.gpt_ckpts)
+            init_wandb(args.wandb_name, args.gpt_ckpts)
         except Exception as e:
             print(f"Error init wandb {e}")
         print(f"Using DDP with {dist.get_world_size()} processes. Start sampling...")
@@ -120,12 +120,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         type=str,
-        default="autoregressive/train/configs/ours_0250000_b.yaml",
+        default="autoregressive/train/configs/final_b.yaml",
     )
     parser.add_argument(
         "--ckpts",
         type=str,
-        default="outputs/ours_0250000_B_fix/000-GPT-B/checkpoints"
+        default="outputs/final/000-GPT-B/checkpoints"
+    )
+    parser.add_argument(
+        "--wandb_name",
+        type=str,
+        default="final"
     )
     cmdargs = parser.parse_args()
 

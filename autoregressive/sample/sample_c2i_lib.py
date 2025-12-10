@@ -35,7 +35,7 @@ class FinalDecoder:
     def encode(self, img):
         return self.model.encode_to_ids(img) # tensor of [1, 576]
 
-    def decode(self, ids):
+    def decode(self, ids, args):
         return self.model.decode_from_ids(ids).detach() # tensor of [1, 3, 256, 256]
 
     def denormalize(self, recon): # recon should be [3, 256, 256]
