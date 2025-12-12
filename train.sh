@@ -1,7 +1,8 @@
 # extract codes
 cd autoregressive/train
-torchrun --nproc_per_node=8 extract_codes_llamagen.py \
-    --ckpt-path xxx/vq_ds16_c2i.pt
+WANDB_MODE=offline torchrun --nproc_per_node=8 extract_codes_llamagen.py \
+    --ckpt-path xxx/vq_ds16_c2i.pt \
+    --bsz 1
 
 
 # convert codes
@@ -15,4 +16,4 @@ python convert_npy_to_hdf5.py \
 
 # train
 cd autoregressive/train
-torchrun --nproc_per_node=8 train_c2i.py --config configs/llamagen.yaml
+WANDB_MODE=offline torchrun --nproc_per_node=8 train_c2i.py --config configs/llamagen.yaml
