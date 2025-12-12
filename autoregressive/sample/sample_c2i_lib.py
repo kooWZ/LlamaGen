@@ -43,6 +43,38 @@ class FinalDecoder:
         dfiimg = (dfi.permute(1, 2, 0) * 255).to(torch.uint8).cpu()
         return dfiimg
 
+class LlamaGenDecoder:
+    def __init__(self, vq_ckpt, device):
+        self.vq_model = None
+        self.device = device
+        self.vq_ckpt = vq_ckpt
+
+    def _init_model(self, args):
+        from tokenizer.tokenizer_image.vq_model import VQ_models
+        self.vq_model = VQ_models[args.vq_model](
+            codebook_size=args.codebook_size,
+            codebook_embed_dim=args.codebook_embed_dim)
+        self.vq_model.to(self.device)
+        self.vq_model.eval()
+        checkpoint = torch.load(self.vq_ckpt, map_location="cpu")
+        self.vq_model.load_state_dict(checkpoint["model"])
+        del checkpoint
+        self.vq_model.requires_grad_(False)
+
+    def encode(self, img):
+        _, _, [_, _, indices] = self.vq_model.encode(img)
+        return indices.reshape(img.shape[0], -1)
+
+    def decode(self, ids, args):
+        qzshape = [len(class_labels), args.codebook_embed_dim, latent_size, latent_size]
+        return self.vq_model.decode_code(ids, qzshape)
+        return self.model.decode_from_ids(ids).detach() # tensor of [1, 3, 256, 256]
+
+    def denormalize(self, recon): # recon should be [3, 256, 256]
+        dfi = torch.clamp((recon + 1) / 2, 0, 1)
+        dfiimg = (dfi.permute(1, 2, 0).cpu().numpy() * 255).round().astype(np.uint8)
+        return dfiimg
+
 class FlexTokDecoder:
     def __init__(self, vq_ckpt, device):
         flextok_path = os.path.abspath(os.path.join(llamagen_path, "external_tokenizers/flextok"))
