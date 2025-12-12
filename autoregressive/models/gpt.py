@@ -62,7 +62,7 @@ class ModelArgs:
 
     use_liger: bool = False
     fp32_attention: bool = False
-
+    use_2d: bool = False
 
 #################################################################################
 #                      Embedding Layers for Class Labels                        #
@@ -335,11 +335,22 @@ class Transformer(nn.Module):
             self.cross_entropy_none = LigerCrossEntropyLoss(reduction="none")
             self.cross_entropy_mean = LigerCrossEntropyLoss(reduction="mean")
 
-        self.freqs_cis = precompute_freqs_cis(
-            self.block_size,
-            self.config.dim // self.config.n_head,
-            self.config.rope_base,
-            self.cls_token_num,
+        if self.config.use_2d:
+            self.grid_size = int(self.block_size ** 0.5)
+            assert self.grid_size * self.grid_size == self.block_size, "block_size must be a perfect square for 2d positional embedding"
+            self.freqs_cis = precompute_freqs_cis_2d(
+                self.grid_size,
+                self.config.dim // self.config.n_head,
+                self.config.rope_base,
+                self.cls_token_num,
+            )
+        else:
+            self.grid_size = self.block_size
+            self.freqs_cis = precompute_freqs_cis(
+                self.grid_size,
+                self.config.dim // self.config.n_head,
+                self.config.rope_base,
+                self.cls_token_num,
         )
 
         # KVCache
@@ -376,12 +387,20 @@ class Transformer(nn.Module):
 
         causal_mask = torch.tril(torch.ones(self.max_seq_length, self.max_seq_length, dtype=torch.bool))
         self.causal_mask = causal_mask.unsqueeze(0).repeat(self.max_batch_size, 1, 1)
-        self.freqs_cis = precompute_freqs_cis(
-            self.config.block_size,
-            self.config.dim // self.config.n_head,
-            self.config.rope_base,
-            self.cls_token_num,
-        )
+        if self.config.use_2d:
+            self.freqs_cis = precompute_freqs_cis_2d(
+                self.grid_size,
+                self.config.dim // self.config.n_head,
+                self.config.rope_base,
+                self.cls_token_num,
+            )
+        else:
+            self.freqs_cis = precompute_freqs_cis(
+                self.config.block_size,
+                self.config.dim // self.config.n_head,
+                self.config.rope_base,
+                self.cls_token_num,
+            )
 
     def clean_caches(self):
         for b in self.layers:
