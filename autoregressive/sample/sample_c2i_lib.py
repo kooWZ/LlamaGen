@@ -40,7 +40,7 @@ class FinalDecoder:
 
     def denormalize(self, recon): # recon should be [3, 256, 256]
         dfi = torch.clamp((recon + 1) / 2, 0, 1)
-        dfiimg = (dfi.permute(1, 2, 0).cpu().numpy() * 255).round().astype(np.uint8)
+        dfiimg = (dfi.permute(1, 2, 0) * 255).to(torch.uint8).cpu()
         return dfiimg
 
 class FlexTokDecoder:
@@ -454,7 +454,7 @@ def do_sample(ckpt_path, args, rank, device, npz_path):
         # Store in CPU memory and record image shape
         if batch_data and img_shape is None:
             img_shape = batch_data[0].shape
-        batch_samples.extend(batch_data)
+        batch_samples.extend(batch_data) # tensorfy option
         batch_labels.extend(batch_class_indices)
         total += global_batch_size
 

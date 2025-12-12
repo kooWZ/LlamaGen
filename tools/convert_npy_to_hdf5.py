@@ -70,7 +70,7 @@ def process_rank(rank, files, args):
 
             # 复制 label 和 path
             labels_flat = np.repeat([item["label"] for item in label_info], n_aug)
-            paths_flat = np.repeat([item["path"][0] for item in label_info], n_aug)
+            paths_flat = np.repeat([item["path"] for item in label_info], n_aug)
 
             # 写入
             n = code_arr_flat.shape[0]

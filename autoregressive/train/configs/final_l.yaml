@@ -22,7 +22,7 @@ use_liger: false
 no_compile: false
 
 epochs: 300
-global_batch_size: 256
+global_batch_size: 1024
 global_seed: 42
 num_workers: 16
 gradient_accumulation_steps: 1
@@ -33,7 +33,7 @@ max_grad_norm: 1
 grad_norm_threshold: 10.0
 check_grad_norm_for_skip: false
 
-ckpt_every_epoch: 10
+ckpt_every_epoch: 20
 do_eval: true
 # eval_every_iter: 20
 reduce_grad_norm_every_iter: 1
@@ -55,9 +55,10 @@ wandb_notes: null
 wandb_entity: "koowz-FVL25"
 wandb_key: null
 
+
 decoder_type: "final"
-vq_config: "/root/projects/continuous_tokenizer/configs/vfmtok-semtok.yaml"
-vq_ckpt: "/root/projects/continuous_tokenizer/weights/semtok-1stage.pth"
+vq_config: "/inspire/hdd/project/autoregressive-video-generation/pengwujian-240108120095/workspace/zijie/projects/postTok/configs/vfmtok-semtok.yaml"
+vq_ckpt: "/inspire/hdd/project/autoregressive-video-generation/pengwujian-240108120095/workspace/zijie/projects/postTok/experiments/tokenizer/exp011-vfmtok-semtok-trainable-both/checkpoints/0250000.pth"
 eval_per_gpu_batch_size: 64
 eval_num_fid_samples: 50000
 eval_gather_freq: 10

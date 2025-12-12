@@ -4,7 +4,7 @@ code_path: "ImageNet-1k/final_codes/h5_dataset/"
 
 auto_resume: true
 # gpt_ckpt: "outputs/ckpts/92_1163523.pt"
-results_dir: "outputs/final_semtok-1stage-B-2"
+results_dir: "outputs/final_semtok-1stage-B"
 upload_to_hf: false
 
 ema: false
@@ -61,7 +61,7 @@ vq_ckpt: "/inspire/hdd/project/autoregressive-video-generation/pengwujian-240108
 eval_per_gpu_batch_size: 64
 eval_num_fid_samples: 50000
 eval_gather_freq: 10
-cfg_scale: 1.25
+cfg_scale: [ 1.0 , 1.25 , 1.5 , 1.75 , 2.0 , 2.25 , 2.5 , 2.75 , 3.0 ]
 cfg_interval: -1
 temperature: 1.0
 top_k: 0

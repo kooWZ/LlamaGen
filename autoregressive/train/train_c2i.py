@@ -129,6 +129,7 @@ def do_eval(ckpt_path, args, rank, device, epoch, step, checkpoint_dir, logger):
         if rank == 0:
             result = evaluate(npz_path)
             logger.info(f"Eval results at epoch {epoch}, step {step}: {result}")
+            os.remove(npz_path)
             return result
         else:
             return {}

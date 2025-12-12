@@ -52,7 +52,7 @@ class H5DatasetInMemoryWithAug(Dataset):
             self.codes = torch.from_numpy(f["code"][:])  # shape: (N, ...)
             self.labels = torch.tensor(f["label"][:], dtype=torch.long)
             self.paths = [p.decode("utf-8") for p in f["path"][:]]
-
+        
         self.groups = defaultdict(list)
         for idx, p in enumerate(self.paths):
             self.groups[p].append(idx)

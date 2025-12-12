@@ -26,6 +26,23 @@ sys.path.append(llamagen_path)
 from autoregressive.sample.sample_c2i_lib import do_sample
 from evaluations.c2i.torch_eval import evaluate
 
+
+def resolve_cfg_scales(args):
+    """
+    Allow cfg_scale to be either a single float/int or a list of values loaded from YAML.
+    """
+    values = getattr(args, "cfg_scale", None)
+    if values is None:
+        return [1.0]
+    if isinstance(values, (list, tuple)):
+        return [float(v) for v in values]
+    if isinstance(values, str):
+        try:
+            return [float(values)]
+        except ValueError:
+            raise ValueError(f"cfg_scale string '{values}' cannot be parsed as float.")
+    return [float(values)]
+
 def init_wandb(run_name, wandb_dir, wandb_project='LlamaGen', wandb_entity='koowz-FVL25'):
     wandb.login(
         key=base64.b64decode(
@@ -40,7 +57,7 @@ def init_wandb(run_name, wandb_dir, wandb_project='LlamaGen', wandb_entity='koow
     )
 
 def do_eval(ckpt, rank, device, name, args):
-    save_to_folder = args.gpt_ckpts
+    save_to_folder = getattr(args, "eval_output_dir", None) or os.path.dirname(ckpt)
     npz_file = os.path.join(save_to_folder, f"{name}_samples.npz")
     do_sample(ckpt, args, rank, device, npz_file)
     if rank == 0:
@@ -52,7 +69,7 @@ def do_eval(ckpt, rank, device, name, args):
             os.remove(npz_file)
         except:
             pass
-        print(f"Ckpt {ckpt} Eval result: {eval_result}")
+        print(f"Eval result: {eval_result}")
         result_file = os.path.join(save_to_folder, f"{name}_result.json")
         with open(result_file, "w") as f:
             json.dump(eval_result, f, indent=4)
@@ -68,6 +85,19 @@ def main(args):
     ), "Sampling with DDP requires at least one GPU. sample.py supports CPU-only usage"
     torch.set_grad_enabled(False)
 
+    ckpt_path = getattr(args, "gpt_ckpt", None) or getattr(args, "gpt_ckpts", None)
+    if ckpt_path is None:
+        raise ValueError("gpt_ckpt not provided in config/arguments.")
+    if not os.path.isfile(ckpt_path):
+        raise FileNotFoundError(f"Checkpoint path '{ckpt_path}' does not exist.")
+    ckpt_basename = os.path.splitext(os.path.basename(ckpt_path))[0]
+    save_dir = getattr(args, "eval_output_dir", None)
+    if save_dir is None:
+        save_dir = os.path.dirname(ckpt_path)
+    os.makedirs(save_dir, exist_ok=True)
+    args.eval_output_dir = save_dir
+    args.gpt_ckpts = save_dir  # backwards compatibility for downstream calls
+
     # Setup DDP:
     dist.init_process_group("nccl")
     rank = dist.get_rank()
@@ -77,36 +107,34 @@ def main(args):
     torch.cuda.set_device(device)
     if rank == 0:
         try:
-            init_wandb(args.wandb_name, args.gpt_ckpts)
+            init_wandb(f"{ckpt_basename}_eval", args.eval_output_dir)
         except Exception as e:
             print(f"Error init wandb {e}")
         print(f"Using DDP with {dist.get_world_size()} processes. Start sampling...")
     dist.barrier()
 
+    cfg_scales = resolve_cfg_scales(args)
     overall_data = {}
-    for ckpt in sorted(list(os.listdir(args.gpt_ckpts))):
-        if ckpt.endswith(".pt"):
-            basename = ckpt.split(".")[0]
-            epoch, step = basename.split("_")
-            if not epoch.isdigit():
-                continue
-            epoch, step = int(epoch), int(step)
-            res = do_eval(os.path.join(args.gpt_ckpts, ckpt), rank, device, basename, args)
-            if rank == 0:
-                try:
-                    res = {f"eval/{k}": v for k, v in res.items()}
-                    wandb.log(res, step=step)
-                except Exception as e:
-                    print(f"Error upload to wandb {e}")
-                try:
-                    with open(os.path.join(args.gpt_ckpts, f"{basename}_result.json"), "r") as f:
-                        data = json.load(f)
-                        overall_data[basename] = data
-                except Exception as e:
-                    print(f"Error read eval json {e}")
-            dist.barrier()
+    for cfg_scale in cfg_scales:
+        args.cfg_scale = cfg_scale
+        scale_tag = str(cfg_scale).replace(".", "p")
+        run_name = f"{ckpt_basename}_cfg{scale_tag}"
+        res = do_eval(ckpt_path, rank, device, run_name, args)
+        if rank == 0:
+            try:
+                log_payload = {f"eval/{k}": v for k, v in res.items()}
+                wandb.log(log_payload)
+            except Exception as e:
+                print(f"Error upload to wandb {e}")
+            try:
+                with open(os.path.join(args.eval_output_dir, f"{run_name}_result.json"), "r") as f:
+                    data = json.load(f)
+                    overall_data[run_name] = data
+            except Exception as e:
+                print(f"Error read eval json {e}")
+        dist.barrier()
     if rank == 0:
-        with open(os.path.join(args.gpt_ckpts, f"overall_result.json"), "w") as f:
+        with open(os.path.join(args.eval_output_dir, f"{ckpt_basename}_overall_result-cfg.json"), "w") as f:
             json.dump(overall_data, f, indent=4)
     dist.destroy_process_group()
 
@@ -120,25 +148,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         type=str,
-        default="autoregressive/train/configs/final_b.yaml",
+        default="autoregressive/train/configs/final_b-cfg.yaml",
     )
     parser.add_argument(
-        "--ckpts",
+        "--ckpt",
         type=str,
-        default="outputs/final_semtok-1stage-B/000-GPT-B/checkpoints"
-    )
-    parser.add_argument(
-        "--wandb_name",
-        type=str,
-        default="final"
+        default="outputs/final_semtok-1stage-B/000-GPT-B/checkpoints/259_0162500.pt"
     )
     cmdargs = parser.parse_args()
 
     cmdargs.config = to_abs(cmdargs.config)
-    cmdargs.ckpts = to_abs(cmdargs.ckpts)
+    cmdargs.ckpt = to_abs(cmdargs.ckpt)
 
     assert os.path.exists(cmdargs.config)
-    assert os.path.exists(cmdargs.ckpts)
+    assert os.path.exists(cmdargs.ckpt)
 
     with open(cmdargs.config, "r") as file:
         config = yaml.load(file, Loader=yaml.FullLoader)
@@ -152,5 +175,9 @@ if __name__ == "__main__":
             return None
 
     args = Args(config)
-    args.gpt_ckpts = cmdargs.ckpts
+    args.gpt_ckpt = cmdargs.ckpt
+    if not hasattr(args, "eval_output_dir") or args.eval_output_dir is None:
+        args.eval_output_dir = os.path.dirname(cmdargs.ckpt)
+    os.makedirs(args.eval_output_dir, exist_ok=True)
+    args.gpt_ckpts = args.eval_output_dir
     main(args)

@@ -178,22 +178,22 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data-path",
         type=str,
-        default="/root/projects/continuous_tokenizer/ImageNet/train",
+        default="/inspire/hdd/project/autoregressive-video-generation/pengwujian-240108120095/workspace/zijie/projects/postTok/ImageNet/train",
     )
     parser.add_argument(
         "--config-path",
         type=str,
-        default="/root/projects/continuous_tokenizer/configs/vfmtok-semtok.yaml",
+        default="/inspire/hdd/project/autoregressive-video-generation/pengwujian-240108120095/workspace/zijie/projects/postTok/configs/vfmtok-semtok.yaml",
     )
     parser.add_argument(
         "--ckpt-path",
         type=str,
-        default="/root/projects/continuous_tokenizer/weights/semtok-1stage.pth",
+        default="/inspire/hdd/project/autoregressive-video-generation/pengwujian-240108120095/workspace/zijie/projects/postTok/experiments/tokenizer/exp011-vfmtok-semtok-trainable-both/checkpoints/0250000.pth",
     )
     parser.add_argument(
         "--code-path",
         type=str,
-        default="dataset/ImageNet-1k/final_codes/",
+        default="/inspire/hdd/project/autoregressive-video-generation/pengwujian-240108120095/workspace/zijie/projects/postTok/LlamaGen/dataset/ImageNet-1k/final_codes/",
     )
     parser.add_argument("--dataset", type=str, default="imagenet")
     parser.add_argument(

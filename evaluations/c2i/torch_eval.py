@@ -23,7 +23,7 @@ import requests
 # Inception weights ported to Pytorch from
 # http://download.tensorflow.org/models/image/imagenet/inception-2015-12-05.tgz
 FID_WEIGHTS_URL = "https://github.com/mseitzer/pytorch-fid/releases/download/fid_weights/pt_inception-2015-12-05-6726825d.pth"  # noqa: E501
-INCEPTION_V3_PATH = "pt_inception-2015-12-05-6726825d.pth"
+INCEPTION_V3_PATH = "/inspire/hdd/project/autoregressive-video-generation/pengwujian-240108120095/workspace/zijie/projects/postTok/weights/pt_inception-2015-12-05-6726825d.pth"
 
 base_path = os.path.abspath(
     os.path.join(
