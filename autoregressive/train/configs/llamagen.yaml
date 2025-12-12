@@ -38,7 +38,6 @@ ckpt_every_epoch: 20
 do_eval: true
 # eval_every_iter: 20
 reduce_grad_norm_every_iter: 1
-ckpt_every_iter: 20
 
 lr: 1.0e-4
 init_lr: 1.0e-6

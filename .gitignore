@@ -9,6 +9,7 @@ logs/
 *.jpeg
 ImageNet-1k
 *.pb
+*.pt
 
 # C extensions
 *.so
