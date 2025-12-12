@@ -1,5 +1,6 @@
 import argparse
 import torch
+import torch.nn.functional as F
 import torch.distributed as dist
 from tqdm import tqdm
 import os
@@ -14,6 +15,14 @@ sys.path.append(llamagen_path)
 from autoregressive.models.generate import generate
 from autoregressive.models.gpt import GPT_models
 
+class Args:
+    def __init__(self, config):
+        for key, value in config.items():
+            setattr(self, key, value)
+
+    def __getattr__(self, name):
+        print(f"Warning: {name} not found in Args, returning None")
+        return None
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -38,16 +47,19 @@ class FinalDecoder:
     def decode(self, ids, args):
         return self.model.decode_from_ids(ids).detach() # tensor of [1, 3, 256, 256]
 
-    def denormalize(self, recon): # recon should be [3, 256, 256]
+    def denormalize(self, recon, resize):
+        # recon should be [3, 384, 384]
         dfi = torch.clamp((recon + 1) / 2, 0, 1)
         dfiimg = (dfi.permute(1, 2, 0) * 255).to(torch.uint8).cpu()
         return dfiimg
 
 class LlamaGenDecoder:
-    def __init__(self, vq_ckpt, device):
+    def __init__(self, vq_ckpt, device, args):
         self.vq_model = None
         self.device = device
         self.vq_ckpt = vq_ckpt
+        self.args = args
+        self._init_model(args)
 
     def _init_model(self, args):
         from tokenizer.tokenizer_image.vq_model import VQ_models
@@ -61,17 +73,25 @@ class LlamaGenDecoder:
         del checkpoint
         self.vq_model.requires_grad_(False)
 
-    def encode(self, img):
+    def encode(self, img): # img should be [B, 3, H, W]
         _, _, [_, _, indices] = self.vq_model.encode(img)
-        return indices.reshape(img.shape[0], -1)
+        return indices.reshape(img.shape[0], -1) # tensor of [B, N]
 
-    def decode(self, ids, args):
-        qzshape = [len(class_labels), args.codebook_embed_dim, latent_size, latent_size]
-        return self.vq_model.decode_code(ids, qzshape)
-        return self.model.decode_from_ids(ids).detach() # tensor of [1, 3, 256, 256]
+    def decode(self, ids, args): # ids should be [B, N]
+        bsz = ids.shape[0]
+        length = ids.shape[1]
+        latent_size = int(length ** 0.5)
+        assert latent_size * latent_size == length, "length should be a perfect square."
+        qzshape = [bsz, self.args.codebook_embed_dim, latent_size, latent_size]
+        return self.vq_model.decode_code(ids, qzshape).detach() # tensor of [B, 3, H, W]
 
-    def denormalize(self, recon): # recon should be [3, 256, 256]
+    def denormalize(self, recon, resize=None): # recon should be [3, H, W]
         dfi = torch.clamp((recon + 1) / 2, 0, 1)
+
+        if resize is not None:
+            # F.interpolate expects input of shape [N, C, H, W]
+            dfi = F.interpolate(dfi.unsqueeze(0), size=(resize, resize), mode='bilinear', align_corners=False).squeeze(0)
+
         dfiimg = (dfi.permute(1, 2, 0).cpu().numpy() * 255).round().astype(np.uint8)
         return dfiimg
 
@@ -101,7 +121,7 @@ class FlexTokDecoder:
             )
         return reconst
 
-    def denormalize(self, recon):
+    def denormalize(self, recon, resize):
         from flextok.utils.demo import denormalize
 
         img_tensor = denormalize(recon).clamp(0, 1)
@@ -125,20 +145,10 @@ class TiTokDecoder:
         reconst = self.titok_tokenizer.decode_tokens(arr.to(self.device))
         return reconst
 
-    def denormalize(self, recon):
+    def denormalize(self, recon, resize):
         img_tensor = recon.clamp(0, 1)
         img_converted = (img_tensor.permute(1, 2, 0) * 255).to(torch.uint8).cpu()
         return img_converted
-
-
-class Args:
-    def __init__(self, config):
-        for key, value in config.items():
-            setattr(self, key, value)
-
-    def __getattr__(self, name):
-        print(f"Warning: {name} not found in Args, returning None")
-        return None
 
 
 class OurDecoder:
@@ -354,7 +364,7 @@ class OurDecoder:
             reconst = self.vq_model.decode_from_ids(arr.to(self.device).contiguous()).cpu()
         return reconst
 
-    def denormalize(self, recon):
+    def denormalize(self, recon, resize):
         recon_image = torch.clamp((recon + 1) / 2, 0, 1)
         img_converted = (recon_image.permute(1, 2, 0) * 255).to(torch.uint8).cpu()
         return img_converted
@@ -377,6 +387,7 @@ def do_sample(ckpt_path, args, rank, device, npz_path):
         token_dropout_p=args.token_dropout_p,
         use_liger=args.use_liger,
         fp32_attention=False,
+        use_2d=True if args.use_2d else False,
     ).to(device)
     if ckpt_path is not None:
         checkpoint = torch.load(ckpt_path, map_location="cpu")
@@ -416,6 +427,8 @@ def do_sample(ckpt_path, args, rank, device, npz_path):
             vq_config = os.path.join(llamagen_path, vq_config)
         assert os.path.exists(vq_config), f"VQ model config {vq_config} does not exist!"
         decoder = FinalDecoder(vq_config, vq_ckpt, device)
+    elif args.decoder_type == "llamagen":
+        decoder = LlamaGenDecoder(vq_ckpt, device, args)
     else:
         raise NotImplementedError(f"Decoder type {args.decoder_type} not implemented")
     dist.barrier()
@@ -478,7 +491,7 @@ def do_sample(ckpt_path, args, rank, device, npz_path):
         batch_data = []
         batch_class_indices = []
         for i in range(n):
-            img_converted = decoder.denormalize(reconst[i])
+            img_converted = decoder.denormalize(reconst[i], args.eval_resize_img)
             batch_data.append(img_converted)
             # Store corresponding class index
             batch_class_indices.append(c_indices[i].int().cpu())  # .numpy()

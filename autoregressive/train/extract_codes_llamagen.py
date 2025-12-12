@@ -78,7 +78,7 @@ def main(args):
     print(f"Rank {rank} has done {len(done_files)} files, last index {last_index}.")
 
     # create and load model
-    vq_model = LlamaGenDecoder(args.ckpt_path, device)
+    vq_model = LlamaGenDecoder(args.ckpt_path, device, args)
 
     # Setup data:
     crop_size = int(args.image_size * args.crop_range)
@@ -174,21 +174,30 @@ if __name__ == "__main__":
         default="/root/projects/continuous_tokenizer/ImageNet/train",
     )
     parser.add_argument(
+        "--vq-model", type=str, default="VQ-16"
+    )
+    parser.add_argument(
+        "--codebook-size", type=int, default=16384
+    )
+    parser.add_argument(
+        "--codebook-embed-dim", type=int, default=8
+    )
+    parser.add_argument(
         "--ckpt-path",
         type=str,
-        default="/root/projects/continuous_tokenizer/weights/semtok-1stage.pth",
+        default="/root/projects/continuous_tokenizer/LlamaGen/vq_ds16_c2i.pt",
     )
     parser.add_argument(
         "--code-path",
         type=str,
-        default="dataset/ImageNet-1k/llamagen_codes/",
+        default="dataset/ImageNet-1k/llamagen_codes_384/",
     )
     parser.add_argument("--dataset", type=str, default="imagenet")
     parser.add_argument(
         "--image-size", type=int, choices=[256, 384, 448, 512], default=384
     )
     parser.add_argument(
-        "--crop-range", type=float, default=1, help="expanding range of center crop"
+        "--crop-range", type=float, default=1.1, help="expanding range of center crop"
     )
     parser.add_argument("--num-workers", type=int, default=16)
     parser.add_argument("--global-seed", type=int, default=42)

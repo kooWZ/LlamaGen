@@ -200,7 +200,7 @@ if __name__ == "__main__":
         "--image-size", type=int, choices=[256, 384, 448, 512], default=384
     )
     parser.add_argument(
-        "--crop-range", type=float, default=1, help="expanding range of center crop"
+        "--crop-range", type=float, default=1.1, help="expanding range of center crop"
     )
     parser.add_argument("--num-workers", type=int, default=16)
     parser.add_argument("--global-seed", type=int, default=42)

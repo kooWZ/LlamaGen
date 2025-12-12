@@ -1,0 +1,73 @@
+dataset: "imagenet_code"
+num_classes: 1000
+code_path: "ImageNet-1k/llamagen_codes_384/h5_dataset/"
+
+auto_resume: true
+# gpt_ckpt: "outputs/ckpts/92_1163523.pt"
+results_dir: "outputs/llamagen-b-384"
+upload_to_hf: false
+
+ema: false
+
+gpt_model: "GPT-B"
+gpt_type: "c2i"
+vocab_size: 16384
+cls_token_num: 1
+dropout_p: 0.1
+token_dropout_p: 0.1
+drop_path_rate: 0.0
+latent_size: 576
+use_liger: false
+use_2d: true
+
+no_compile: false
+
+epochs: 300
+global_batch_size: 2
+global_seed: 42
+num_workers: 16
+gradient_accumulation_steps: 1
+mixed_precision: "bf16"
+fp32_attention: true
+
+max_grad_norm: 1
+grad_norm_threshold: 10.0
+check_grad_norm_for_skip: false
+
+ckpt_every_epoch: 20
+do_eval: true
+# eval_every_iter: 20
+reduce_grad_norm_every_iter: 1
+ckpt_every_iter: 20
+
+lr: 1.0e-4
+init_lr: 1.0e-6
+final_lr: 1.2e-5
+weight_decay: 5.0e-2
+scheduler: "constant"
+beta1: 0.9
+beta2: 0.95
+eps: 1.0e-6
+warmup_epochs: 80
+
+wandb_project: "LlamaGen"
+wandb_run_name: "llamagen-b-384"
+wandb_tags: []
+wandb_notes: null
+wandb_entity: "koowz-FVL25"
+wandb_key: null
+
+decoder_type: "llamagen"
+vq_ckpt: "/root/projects/continuous_tokenizer/LlamaGen/vq_ds16_c2i.pt"
+eval_per_gpu_batch_size: 3
+eval_num_fid_samples: 50000
+eval_gather_freq: 10
+cfg_scale: 1.25
+cfg_interval: -1
+temperature: 1.0
+top_k: 0
+top_p: 1.0
+vq_model: "VQ-16"
+codebook_size: 16384
+codebook_embed_dim: 8
+eval_resize_img: 256

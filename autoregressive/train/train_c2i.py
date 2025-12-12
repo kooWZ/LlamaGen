@@ -239,6 +239,7 @@ def main(args):
         token_dropout_p=args.token_dropout_p,
         use_liger=args.use_liger,
         fp32_attention=args.fp32_attention,
+        use_2d=True if args.use_2d else False,
     ).to(device)
 
     wandb_extra_config = {}
@@ -281,9 +282,10 @@ def main(args):
         shuffle=True,
         seed=args.global_seed,
     )
+    local_bsz = int(args.global_batch_size // dist.get_world_size())
     loader = DataLoader(
         dataset,
-        batch_size=int(args.global_batch_size // dist.get_world_size()),
+        batch_size=local_bsz,
         shuffle=False,
         sampler=sampler,
         num_workers=args.num_workers,
@@ -293,6 +295,7 @@ def main(args):
 
     # Setup learning rate scheduler
     total_steps = args.epochs * len(loader)
+    logger.info(f"Dataset loaded. {len(dataset)=}, global_bsz={args.global_batch_size}, {local_bsz=}, {len(loader)=}, {total_steps=}")
 
     if args.scheduler == "cosine_with_warmup":
         # Calculate warmup steps from warmup epochs if available
@@ -389,9 +392,9 @@ def main(args):
         logger.info(
             f"Using ckpt_every_epoch: {args.ckpt_every_epoch}, calculated ckpt_every: {ckpt_every}"
         )
-    else:
+    if args.ckpt_every_iter is not None:
         ckpt_every = args.ckpt_every_iter
-        logger.info(f"Using ckpt_every directly: {ckpt_every}")
+        logger.info(f"Using ckpt_every directly (may overwrite): {ckpt_every}")
 
     # if args.eval_every_epoch is not None:
     #     eval_every = args.eval_every_epoch * len(loader)
