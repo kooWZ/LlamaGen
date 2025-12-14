@@ -492,6 +492,8 @@ def do_sample(ckpt_path, args, rank, device, npz_path):
         batch_class_indices = []
         for i in range(n):
             img_converted = decoder.denormalize(reconst[i], args.eval_resize_img)
+            if isinstance(img_converted, np.ndarray):
+                img_converted = torch.from_numpy(img_converted)            
             batch_data.append(img_converted)
             # Store corresponding class index
             batch_class_indices.append(c_indices[i].int().cpu())  # .numpy()

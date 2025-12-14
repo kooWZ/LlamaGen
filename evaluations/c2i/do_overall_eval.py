@@ -120,17 +120,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         type=str,
-        default="autoregressive/train/configs/final_b.yaml",
+        default="autoregressive/train/configs/llamagen.yaml",
     )
     parser.add_argument(
         "--ckpts",
         type=str,
-        default="outputs/final_semtok-1stage-B/000-GPT-B/checkpoints"
+        default="outputs/llamagen-b-384/000-GPT-B/checkpoints"
     )
     parser.add_argument(
         "--wandb_name",
         type=str,
-        default="final"
+        default="llamagen"
     )
     cmdargs = parser.parse_args()
 

@@ -171,7 +171,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data-path",
         type=str,
-        default="/root/projects/continuous_tokenizer/ImageNet/train",
+        default="/inspire/hdd/project/autoregressive-video-generation/pengwujian-240108120095/workspace/zijie/projects/postTok/ImageNet/train",
     )
     parser.add_argument(
         "--vq-model", type=str, default="VQ-16"
@@ -185,12 +185,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt-path",
         type=str,
-        default="/root/projects/continuous_tokenizer/LlamaGen/vq_ds16_c2i.pt",
+        default="/inspire/hdd/project/autoregressive-video-generation/pengwujian-240108120095/workspace/zijie/projects/postTok/weights/LlamaGen/vq_ds16_c2i.pt",
     )
     parser.add_argument(
         "--code-path",
         type=str,
-        default="dataset/ImageNet-1k/llamagen_codes_384/",
+        default="/inspire/hdd/project/autoregressive-video-generation/pengwujian-240108120095/workspace/zijie/projects/postTok/LlamaGen/dataset/ImageNet-1k/llamagen_codes_384/",
     )
     parser.add_argument("--dataset", type=str, default="imagenet")
     parser.add_argument(
