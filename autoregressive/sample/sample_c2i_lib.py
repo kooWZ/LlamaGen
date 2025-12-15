@@ -8,6 +8,7 @@ import time
 import numpy as np
 import math
 import sys
+from PIL import Image
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 llamagen_path = os.path.abspath(os.path.join(current_dir, "../../"))
@@ -370,7 +371,7 @@ class OurDecoder:
         return img_converted
 
 @torch.compiler.disable(recursive=True)
-def do_sample(ckpt_path, args, rank, device, npz_path):
+def do_sample(ckpt_path, args, rank, device, npz_path, save_png_dir=None):
     if args.drop_path_rate > 0.0:
         dropout_p = 0.0
     else:
@@ -572,5 +573,12 @@ def do_sample(ckpt_path, args, rank, device, npz_path):
             print(f"  Images shape: {final_samples.shape}")
             print(f"  Labels shape: {final_labels.shape}")
             print("Memory efficient generation with labels completed!")
+            if save_png_dir is not None:
+                os.makedirs(save_png_dir, exist_ok=True)
+                base = os.path.splitext(os.path.basename(npz_path))[0]
+                for idx, img in enumerate(final_samples):
+                    filename = os.path.join(save_png_dir, f"{base}_{idx:06d}.png")
+                    Image.fromarray(img.astype(np.uint8)).save(filename)
+                print(f"Saved PNG samples to {save_png_dir}")
         else:
             print("!!!WARNING: No samples collected!")
